@@ -1,0 +1,107 @@
+\documentclass[10pt,a4paper]{article}
+
+% ---------- Page and fonts ----------
+\usepackage[a4paper,margin=1.5cm,top=1.3cm,bottom=1.3cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx}                 % Times for text and math
+\usepackage[scaled=0.92]{helvet}      % Helvetica for headings
+\usepackage{courier}
+\usepackage{microtype}
+\usepackage{multicol}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{titlesec}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{accent}{HTML}{1D5C7D}
+\definecolor{soft}{HTML}{E4EEF4}
+\definecolor{muted}{HTML}{5A6370}
+\newcommand{\doi}[1]{\href{https://doi.org/#1}{\color{accent}doi:#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\setlength{\columnsep}{6mm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3pt}
+\pagestyle{empty}
+
+\titleformat{\section}{\sffamily\bfseries\color{accent}\normalsize}{\thesection.}{0.4em}{}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
+\setlist{nosep,leftmargin=1.3em}
+
+\begin{document}
+
+% ---------- Header ----------
+{\sffamily\small\color{accent}\textbf{Topic proposal: Edge AI and IoT Integration}}\\[2pt]
+{\large\bfseries SLA-Aware Split Inference with Early Exit for IoT}\\[4pt]
+{\sffamily\footnotesize\color{muted}
+\textbf{\color{black}Student:} Nguyen Minh Chinh (411221380)\quad
+\textbf{\color{black}Course:} CSIE52400 Distributed System, National Dong Hwa University\quad
+\textbf{\color{black}Date:} October 1, 2026}\\[-4pt]
+{\color{accent}\rule{\textwidth}{1.2pt}}
+
+\vspace{-6pt}
+\begin{multicols}{2}
+
+\section{Introduction to the theme}
+The theme of this project is \emph{Edge AI and IoT integration}: running deep neural network (DNN) inference for Internet of Things devices such as cameras, drones and wearable sensors. These devices have little compute, memory and energy, so a modern DNN runs slowly on them. Sending raw data to a remote cloud solves the compute problem but adds wide-area latency, uses bandwidth and fails when the connection drops.
+
+Edge computing places a server one network hop from the devices, and two techniques let a device and an edge server share one model:
+\begin{itemize}
+  \item \textbf{Split computing (partitioning).} The device runs the first layers of the DNN and sends the intermediate tensor to a server, which runs the rest~\cite{neurosurgeon}. The best split point depends on per-layer compute cost, output size and bandwidth.
+  \item \textbf{Early exiting.} Extra classifiers (``exits'') are attached to intermediate layers. When an exit is confident enough, inference stops there and returns a result without running the remaining layers~\cite{branchynet}. \end{itemize}
+Edgent~\cite{edgent} combines the two by choosing one split point and one exit point for all inputs; SPINN~\cite{spinn} instead lets confident inputs finish on the device and send nothing, offloading only the rest. The difficulty is that the right choice changes at runtime with bandwidth, edge server load and the number of devices competing for the edge. Exit thresholds are also usually fixed by hand in advance; the survey~\cite{survey} names optimising the exit decision as an open direction, whereas this project selects the threshold $\tau$ at runtime from measured conditions. Deciding where each part of the computation runs, as conditions change and servers fail, is a distributed systems problem.
+
+\section{Reasons for the topic selection}
+\begin{enumerate}
+  \item \textbf{It addresses a real weakness of IoT systems.} IoT devices are often too weak to run modern AI models on their own: a camera or sensor node with a small CPU takes far too long to run a full DNN. Relying on the cloud instead is slow, because every request crosses the wide-area network, and fragile, because a weak connection or a cloud outage leaves the device without answers. A middle ground is needed, in which the device and a nearby edge server share the work and the split adapts to current conditions; this project builds and evaluates such a system.
+  \item \textbf{It fits the course theme.} Deciding where inference runs across device and edge is a central problem of the course theme, Edge AI and IoT integration. It is also a distributed systems problem: the system must divide work between nodes, adapt to a changing network, share one server among several devices and keep working when the server fails.
+  \item \textbf{It can be built and measured on one laptop.} No physical IoT hardware or cloud budget is needed. CPU-capped Docker containers emulate Raspberry Pi-class devices, a GPU container acts as the edge server, and \texttt{tc netem} makes the network slow or unreliable on demand. MobileNetV2 and ResNet-18 on Imagenette (10 ImageNet classes, 224$\times$224) fit in the laptop's 6\,GB GPU, and every condition can be reproduced exactly for fair comparison.
+\end{enumerate}
+
+\end{multicols}
+
+\vspace{-4pt}
+\section{Candidate papers}
+SPINN is selected as the main paper because it is the only candidate that jointly optimises the split point and a per-input, confidence-based early-exit policy at runtime against user-defined service-level agreements (SLAs), and it handles server unavailability.
+
+\vspace{2pt}
+{\footnotesize
+\renewcommand{\arraystretch}{1.15}
+\begin{tabularx}{\textwidth}{@{}p{0.25cm} p{3.1cm} Y >{\raggedright\arraybackslash}p{4.2cm}@{}}
+\toprule
+\textbf{\#} & \textbf{Paper} & \textbf{Main idea} & \textbf{Role in this project} \\
+\midrule
+1 & SPINN~\cite{spinn} \newline {\color{muted}ACM MobiCom 2020} &
+  Device--cloud inference with progressive (multi-exit) CNNs. At runtime, a scheduler tunes the split point and the exit confidence threshold together so that user-set performance targets hold as network and server load change; local exits keep the device answering when the server is unreachable. &
+  \textbf{Main paper (selected).} Basis for the joint $(k,\tau)$ scheduler, SLA modes and fallback. \\
+2 & Edgent~\cite{edgent} \newline {\color{muted}IEEE TWC 2020} &
+  Device--edge inference with two knobs: DNN partitioning and right-sizing (one early-exit point chosen for all inputs). Regression-based latency prediction for static networks and online change-point detection for dynamic ones. &
+  \textbf{Supporting.} Latency-prediction approach and reaction to bandwidth changes. \\
+3 & Li et al.~\cite{li2024} \newline {\color{muted}IEEE TMC 2024} &
+  Block-level DNN partitioning between IoT devices and edge servers in MEC networks with heterogeneous resources and delay constraints, learned with a multi-task asynchronous advantage actor-critic method. &
+  \textbf{Supporting.} Motivates multi-device experiments and block-level split points. \\
+4 & CoEdge~\cite{coedge} \newline {\color{muted}IEEE/ACM ToN 2021} &
+  Cooperative inference across several heterogeneous edge devices, partitioning the workload adaptively to each device's compute capability and network conditions to reduce energy at similar latency. &
+  \textbf{Optional extension.} Device-to-device cooperation. \\
+5 & Matsubara et al.~\cite{survey} \newline {\color{muted}ACM Comput.\ Surv.\ 2022} &
+  Survey of split computing and early exiting: categorisation and comparison of existing approaches and open research challenges. &
+  \textbf{Background.} Terminology, related work and positioning. \\
+\bottomrule
+\end{tabularx}}
+
+{\scriptsize
+\renewcommand{\refname}{References}
+\begin{thebibliography}{9}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}
+\bibitem{spinn} S. Laskaridis, S. I. Venieris, M. Almeida, I. Leontiadis, N. D. Lane, ``SPINN: Synergistic Progressive Inference of Neural Networks over Device and Cloud,'' in \emph{Proc. ACM MobiCom}, 2020. \doi{10.1145/3372224.3419194}
+\bibitem{edgent} E. Li, L. Zeng, Z. Zhou, X. Chen, ``Edge AI: On-Demand Accelerating Deep Neural Network Inference via Edge Computing,'' \emph{IEEE Trans. Wireless Communications}, vol.~19, no.~1, 2020. \doi{10.1109/TWC.2019.2946140}
+\bibitem{li2024} H. Li, X. Li, Q. Fan, Q. He, X. Wang, V. C. M. Leung, ``Distributed DNN Inference with Fine-Grained Model Partitioning in Mobile Edge Computing Networks,'' \emph{IEEE Trans. Mobile Computing}, vol.~23, no.~10, 2024. \doi{10.1109/TMC.2024.3357874}
+\bibitem{coedge} L. Zeng, X. Chen, Z. Zhou, L. Yang, J. Zhang, ``CoEdge: Cooperative DNN Inference with Adaptive Workload Partitioning over Heterogeneous Edge Devices,'' \emph{IEEE/ACM Trans. Networking}, vol.~29, no.~2, 2021. \doi{10.1109/TNET.2020.3042320}
+\bibitem{survey} Y. Matsubara, M. Levorato, F. Restuccia, ``Split Computing and Early Exiting for Deep Learning Applications: Survey and Research Challenges,'' \emph{ACM Computing Surveys}, 2022. \doi{10.1145/3527155}
+\bibitem{neurosurgeon} Y. Kang, J. Hauswald, C. Gao, A. Rovinski, T. Mudge, J. Mars, L. Tang, ``Neurosurgeon: Collaborative Intelligence Between the Cloud and Mobile Edge,'' in \emph{Proc. ACM ASPLOS}, 2017, pp.~615--629. \doi{10.1145/3037697.3037698}
+\bibitem{branchynet} S. Teerapittayanon, B. McDanel, H. T. Kung, ``BranchyNet: Fast Inference via Early Exiting from Deep Neural Networks,'' in \emph{Proc. ICPR}, 2016, pp.~2464--2469. \doi{10.1109/ICPR.2016.7900006}
+\end{thebibliography}}
+
+\end{document}

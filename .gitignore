@@ -1,0 +1,25 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Data, results, checkpoints
+data/
+results/
+*.pt
+*.pth
+
+# LaTeX build files
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Paper PDFs (copyrighted): keep only our own documents
+Documents/*.pdf
+!Documents/report.pdf
+!Documents/proposal.pdf
+EOF

@@ -1,0 +1,47 @@
+
+=== 32x32: raw image 3.0 KB, smallest split tensor 5.0 KB, full model 4.1 ms (1 core), edge 5.4 ms (2 cores)
+    split points sending less than the raw image: 0 of 19
+    dev 10x (local 41 ms), P_cont=1.0: 1M:local 41 | 2M:offload 38 | 5M:offload 30 | 10M:offload 28 | 20M:offload 27 | 50M:offload 26
+    dev 10x (local 41 ms), P_cont=0.5: 1M:local 41 | 2M:offload 38 | 5M:offload 30 | 10M:offload 28 | 20M:split5 27 | 50M:split5 25
+    dev 10x (local 41 ms), P_cont=0.3: 1M:local 41 | 2M:split8 34 | 5M:split5 26 | 10M:split5 22 | 20M:split5 20 | 50M:split4 18
+    dev 20x (local 82 ms), P_cont=1.0: 1M:offload 50 | 2M:offload 38 | 5M:offload 30 | 10M:offload 28 | 20M:offload 27 | 50M:offload 26
+    dev 20x (local 82 ms), P_cont=0.5: 1M:offload 50 | 2M:offload 38 | 5M:offload 30 | 10M:offload 28 | 20M:offload 27 | 50M:offload 26
+    dev 20x (local 82 ms), P_cont=0.3: 1M:offload 50 | 2M:offload 38 | 5M:offload 30 | 10M:offload 28 | 20M:offload 27 | 50M:offload 26
+
+=== 224x224: raw image 147.0 KB, smallest split tensor 15.3 KB, full model 16.7 ms (1 core), edge 16.4 ms (2 cores)
+    split points sending less than the raw image: 15 of 19
+    dev 10x (local 167 ms), P_cont=1.0: 1M:local 167 | 2M:local 167 | 5M:local 167 | 10M:offload 157 | 20M:offload 97 | 50M:offload 60
+    dev 10x (local 167 ms), P_cont=0.5: 1M:local 167 | 2M:local 167 | 5M:split8 148 | 10M:split5 138 | 20M:offload 97 | 50M:offload 60
+    dev 10x (local 167 ms), P_cont=0.3: 1M:local 167 | 2M:split8 153 | 5M:split8 135 | 10M:split5 124 | 20M:offload 97 | 50M:offload 60
+    dev 20x (local 334 ms), P_cont=1.0: 1M:local 334 | 2M:local 334 | 5M:offload 277 | 10M:offload 157 | 20M:offload 97 | 50M:offload 60
+    dev 20x (local 334 ms), P_cont=0.5: 1M:local 334 | 2M:split8 293 | 5M:split5 262 | 10M:offload 157 | 20M:offload 97 | 50M:offload 60
+    dev 20x (local 334 ms), P_cont=0.3: 1M:split8 298 | 2M:split8 268 | 5M:split5 240 | 10M:offload 157 | 20M:offload 97 | 50M:offload 60
+
+=== 320x320: raw image 300.0 KB, smallest split tensor 31.2 KB, full model 35.1 ms (1 core), edge 32.2 ms (2 cores)
+    split points sending less than the raw image: 15 of 19
+    dev 10x (local 351 ms), P_cont=1.0: 1M:local 351 | 2M:local 351 | 5M:local 351 | 10M:offload 298 | 20M:offload 175 | 50M:offload 101
+    dev 10x (local 351 ms), P_cont=0.5: 1M:local 351 | 2M:local 351 | 5M:split8 322 | 10M:offload 298 | 20M:offload 175 | 50M:offload 101
+    dev 10x (local 351 ms), P_cont=0.3: 1M:local 351 | 2M:split8 337 | 5M:split8 300 | 10M:split5 281 | 20M:offload 175 | 50M:offload 101
+    dev 20x (local 701 ms), P_cont=1.0: 1M:local 701 | 2M:local 701 | 5M:offload 544 | 10M:offload 298 | 20M:offload 175 | 50M:offload 101
+    dev 20x (local 701 ms), P_cont=0.5: 1M:local 701 | 2M:split8 650 | 5M:offload 544 | 10M:offload 298 | 20M:offload 175 | 50M:offload 101
+    dev 20x (local 701 ms), P_cont=0.3: 1M:split8 665 | 2M:split8 603 | 5M:offload 544 | 10M:offload 298 | 20M:offload 175 | 50M:offload 101
+
+=== 448x448: raw image 588.0 KB, smallest split tensor 61.2 KB, full model 65.3 ms (1 core), edge 58.6 ms (2 cores)
+    split points sending less than the raw image: 15 of 19
+    dev 10x (local 653 ms), P_cont=1.0: 1M:local 653 | 2M:local 653 | 5M:local 653 | 10M:offload 560 | 20M:offload 319 | 50M:offload 175
+    dev 10x (local 653 ms), P_cont=0.5: 1M:local 653 | 2M:local 653 | 5M:split8 603 | 10M:split5 558 | 20M:offload 319 | 50M:offload 175
+    dev 10x (local 653 ms), P_cont=0.3: 1M:local 653 | 2M:split8 636 | 5M:split8 563 | 10M:split5 518 | 20M:offload 319 | 50M:offload 175
+    dev 20x (local 1306 ms), P_cont=1.0: 1M:local 1306 | 2M:local 1306 | 5M:offload 1042 | 10M:offload 560 | 20M:offload 319 | 50M:offload 175
+    dev 20x (local 1306 ms), P_cont=0.5: 1M:local 1306 | 2M:split8 1228 | 5M:offload 1042 | 10M:offload 560 | 20M:offload 319 | 50M:offload 175
+    dev 20x (local 1306 ms), P_cont=0.3: 1M:split8 1261 | 2M:split8 1140 | 5M:split5 1023 | 10M:offload 560 | 20M:offload 319 | 50M:offload 175
+
+=== 512x512: raw image 768.0 KB, smallest split tensor 80.0 KB, full model 92.1 ms (1 core), edge 80.8 ms (2 cores)
+    split points sending less than the raw image: 15 of 19
+    dev 10x (local 921 ms), P_cont=1.0: 1M:local 921 | 2M:local 921 | 5M:local 921 | 10M:offload 730 | 20M:offload 415 | 50M:offload 227
+    dev 10x (local 921 ms), P_cont=0.5: 1M:local 921 | 2M:local 921 | 5M:split8 851 | 10M:offload 730 | 20M:offload 415 | 50M:offload 227
+    dev 10x (local 921 ms), P_cont=0.3: 1M:local 921 | 2M:split8 895 | 5M:split5 793 | 10M:offload 730 | 20M:offload 415 | 50M:offload 227
+    dev 20x (local 1841 ms), P_cont=1.0: 1M:local 1841 | 2M:local 1841 | 5M:offload 1359 | 10M:offload 730 | 20M:offload 415 | 50M:offload 227
+    dev 20x (local 1841 ms), P_cont=0.5: 1M:local 1841 | 2M:split8 1733 | 5M:offload 1359 | 10M:offload 730 | 20M:offload 415 | 50M:offload 227
+    dev 20x (local 1841 ms), P_cont=0.3: 1M:split8 1777 | 2M:split8 1620 | 5M:offload 1359 | 10M:offload 730 | 20M:offload 415 | 50M:offload 227
+quota25% 32px full model: 4.9 ms
+quota25% 224px full model: 94.1 ms
