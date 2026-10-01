@@ -1,25 +1,85 @@
-# Python
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
 .venv/
 venv/
-__pycache__/
-*.pyc
+env/
 
-# Data, results, checkpoints
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# ---------- Data, checkpoints, results ----------
+# Datasets (Imagenette is downloaded by the code, never committed)
 data/
-results/
+datasets/
+imagenette2*/
+*.tgz
+*.tar.gz
+
+# Model checkpoints
+checkpoints/
 *.pt
 *.pth
+*.ckpt
+*.onnx
 
-# LaTeX build files
+# Raw per-request CSVs from experiments (regenerate with scripts/run_experiment.py)
+results/
+
+# Training / run logs (TensorBoard, ad-hoc logs)
+runs/
+logs/
+
+# Kept on purpose: experiments/profiles/, experiments/feasibility/, experiments/configs/,
+# experiments/traces/ and figures/ are small and the report depends on them.
+
+# ---------- Generated files ----------
+# Written by `python scripts/gen_compose.py N`; regenerate instead of editing
+docker-compose.yml
+
+# ---------- LaTeX build files ----------
 *.aux
 *.log
 *.out
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+*.toc
+*.bbl
+*.blg
+*.nav
+*.snm
+*.xdv
 
-# Paper PDFs (copyrighted): keep only our own documents
+# ---------- Documents ----------
+# Paper PDFs are copyrighted: keep only our own documents
 Documents/*.pdf
 !Documents/report.pdf
 !Documents/proposal.pdf
-EOF
+
+# ---------- Secrets and local config ----------
+.env
+.env.*
+*.pem
+*.key
+
+# ---------- Editors and OS ----------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+# Windows metadata created when copying files into WSL
+*:Zone.Identifier
