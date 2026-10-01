@@ -38,9 +38,7 @@ def build_blocks(res: int) -> list[torch.nn.Module]:
     if res == 32:  # common CIFAR adaptation: remove two early stride-2 downsamplings
         model.features[0][0].stride = (1, 1)
         model.features[2].conv[1][0].stride = (1, 1)
-    head = torch.nn.Sequential(
-        torch.nn.AdaptiveAvgPool2d(1), torch.nn.Flatten(), model.classifier
-    )
+    head = torch.nn.Sequential(torch.nn.AdaptiveAvgPool2d(1), torch.nn.Flatten(), model.classifier)
     return [b.eval() for b in [*model.features, head]]
 
 
@@ -97,26 +95,15 @@ def analyze(dev: dict, edge: dict) -> None:
             f"smallest split tensor {min(sent[1:]) / 1024:.1f} KB, "
             f"full model {one_core:.1f} ms (1 core), edge {sum(edge_ms):.1f} ms (2 cores)"
         )
-        print(
-            f"    split points sending less than the raw image: {len(smaller)} of {n - 1}"
-        )
+        print(f"    split points sending less than the raw image: {len(smaller)} of {n - 1}")
         for slow in DEVICE_SLOWDOWNS:
             dev_ms = [b["ms"] * slow for b in blocks]
             for p_cont in P_CONTINUE:
                 cells = []
                 for bw in BANDWIDTHS_MBPS:
-                    lats = [
-                        latency_ms(k, dev_ms, edge_ms, sent, bw, p_cont)
-                        for k in range(n + 1)
-                    ]
+                    lats = [latency_ms(k, dev_ms, edge_ms, sent, bw, p_cont) for k in range(n + 1)]
                     best = min(range(n + 1), key=lats.__getitem__)
-                    name = (
-                        "offload"
-                        if best == 0
-                        else "local"
-                        if best == n
-                        else f"split{best}"
-                    )
+                    name = "offload" if best == 0 else "local" if best == n else f"split{best}"
                     cells.append(f"{bw}M:{name} {lats[best]:.0f}")
                 print(
                     f"    dev {slow}x (local {sum(dev_ms):.0f} ms), P_cont={p_cont}: "
