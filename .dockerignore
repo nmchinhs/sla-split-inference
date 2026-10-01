@@ -1,0 +1,7 @@
+# The images only need pyproject.toml, proto/, src/ and scripts/.
+*
+!pyproject.toml
+!proto
+!src
+!scripts
+**/__pycache__

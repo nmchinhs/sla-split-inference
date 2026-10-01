@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+# Edge server: GPU. The default Linux torch wheel bundles the CUDA runtime; the NVIDIA
+# Container Toolkit injects the host driver and nvidia-smi at run time (gpus: all).
+FROM python:3.11-slim
+
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    PYTHONUNBUFFERED=1
+
+# The build link can be slow or flaky: long timeouts, retries, resumable downloads (pip >= 25.1),
+# and a BuildKit cache mount so wheels already downloaded survive a failed build.
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    PIP_RESUME_RETRIES=20 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN --mount=type=cache,target=/root/.cache/pip pip install --upgrade pip
+
+WORKDIR /app
+# Editable install against an empty package, so the (large) dependency layer is cached
+# across source changes.
+COPY pyproject.toml ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    mkdir -p src/edgeinf && touch src/edgeinf/__init__.py \
+    && pip install -e .
+
+COPY proto ./proto
+COPY src ./src
+# Same command as `make proto`; stubs are generated against the image's grpcio.
+RUN mkdir -p src/edgeinf/rpc && touch src/edgeinf/rpc/__init__.py \
+    && python -m grpc_tools.protoc -Iedgeinf/rpc=proto --python_out=src --grpc_python_out=src \
+       proto/inference.proto
+
+CMD ["python", "-m", "edgeinf.edge.server"]
