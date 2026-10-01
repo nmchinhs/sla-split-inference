@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgeinf"
+version = "0.1.0"
+description = "SLA-aware split inference with early exit for IoT"
+requires-python = ">=3.11,<3.12"
+# Single source of truth for dependencies: environment.yml installs this package with pip,
+# and the Docker images will too (the device image installs CPU-only torch first).
+dependencies = [
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "grpcio>=1.66",
+    "grpcio-tools>=1.66",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["src/edgeinf/rpc/*_pb2*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

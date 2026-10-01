@@ -1,0 +1,10 @@
+# Local development environment (conda). Docker images use pip instead.
+# Create with `make setup`; activate with `conda activate edgeinf`.
+name: edgeinf
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -e .[dev]
