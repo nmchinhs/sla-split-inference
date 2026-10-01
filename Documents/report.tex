@@ -92,7 +92,7 @@ SPINN~\cite{spinn} co-optimises the DNN split point and the early-exit policy at
 Offline, a profiler records per-layer compute time on each tier, per-layer output size, and each exit's accuracy and exit rate at different thresholds. Online, the scheduler reads current bandwidth and edge queue length, predicts latency and accuracy for every $(k,\tau)$ pair, and picks the pair that best meets the SLA. It re-plans when conditions change. Tensors move over gRPC; a heartbeat detects edge failure and triggers local fallback.
 
 \section{Experimental setup}
-The testbed is emulated on one laptop (RTX 4050, 6\,GB VRAM) using WSL2 and Docker Compose. Device containers are limited to 0.25 CPU and 512\,MB and pinned to separate cores to approximate a Raspberry Pi; the edge container uses the GPU. \texttt{tc netem} sets bandwidth, delay and loss per link. Workload: MobileNetV2 and ResNet-18 on Imagenette, a 10-class ImageNet subset, at 224$\times$224, with 1--10 concurrent clients and injected edge failures.
+The testbed is emulated on one laptop (RTX 4050, 6\,GB VRAM) running Ubuntu with Docker Compose. Device containers are limited to 0.25 CPU and 512\,MB and pinned to separate cores to approximate a Raspberry Pi; the edge container uses the GPU. \texttt{tc netem} sets bandwidth, delay and loss per link. Workload: MobileNetV2 and ResNet-18 on Imagenette, a 10-class ImageNet subset, at 224$\times$224, with 1--10 concurrent clients and injected edge failures.
 
 \section{Evaluation metrics}
 SLA satisfaction rate (share of requests meeting the target), end-to-end latency (mean and p95), throughput, top-1 accuracy, bytes transmitted per inference, device exit rate, time to adapt after a bandwidth change, and recovery time after edge failure.
