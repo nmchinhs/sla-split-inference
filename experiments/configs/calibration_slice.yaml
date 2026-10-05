@@ -1,0 +1,36 @@
+# CPU-quota calibration, stage 1: how long should one slice of CPU time be?
+# The share of CPU time is held at 1/7 and at 1/14 while the quota (the slice) varies, so any
+# change in latency is caused by the slice length alone. Run on the host:
+#
+#   conda run -n edgeinf python scripts/calibrate_cpu.py experiments/configs/calibration_slice.yaml
+seed: 0
+image: edgeinf-device
+cpu: 8          # host CPU the container is pinned to; its sibling thread (9) must be idle
+memory: 512m
+env:
+  # Pin glibc malloc so that freed tensors are reused instead of returned to the kernel and
+  # faulted in again on every request (see experiments/calibration.md).
+  GLIBC_TUNABLES: glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
+repeats: 3
+requests: 25    # timed requests per pattern, after `warmup` untimed ones
+warmup: 3
+gap_ms: [20, 220]   # idle time before each request in the "spaced" pattern, uniform
+models:
+  mobilenetv2: [20, 5]   # split points to time: 20 = the whole model, 5 = first split smaller than the image
+settings:       # [quota_us, period_us]
+  - [100000, 100000]   # no throttling
+  - [25000, 100000]    # cpus: 0.25, the Phase 1 setting
+  # share 1/7
+  - [1000, 7000]
+  - [1500, 10500]
+  - [2000, 14000]
+  - [3000, 21000]
+  - [4000, 28000]
+  - [6000, 42000]
+  - [8000, 56000]
+  - [14000, 98000]
+  # share 1/14
+  - [1000, 14000]
+  - [2000, 28000]
+  - [4000, 56000]
+  - [7000, 98000]

@@ -1,0 +1,30 @@
+# CPU-quota calibration, stage 2: which short slice, and which period, give about 105 ms?
+# Stage 1 (calibration_slice.yaml) showed that only slices of 1-2 ms slow a request evenly.
+# Here each slice length is tried with three periods around the one expected to give 105 ms for
+# MobileNetV2, one of them a whole number of milliseconds, to compare stability across repeats
+# (every repeat re-applies the setting, so the period timer starts at a new phase). Run on the host:
+#
+#   conda run -n edgeinf python scripts/calibrate_cpu.py experiments/configs/calibration_period.yaml
+seed: 0
+image: edgeinf-device
+cpu: 8          # host CPU the container is pinned to; its sibling thread (9) must be idle
+memory: 512m
+env:
+  GLIBC_TUNABLES: glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
+repeats: 5
+requests: 25
+warmup: 3
+gap_ms: [20, 220]
+models:
+  mobilenetv2: [20, 5]
+settings:       # [quota_us, period_us]
+  - [100000, 100000]   # no throttling
+  - [1000, 4500]
+  - [1000, 4700]
+  - [1000, 5000]
+  - [1500, 7700]
+  - [1500, 8000]
+  - [1500, 8300]
+  - [2000, 11500]
+  - [2000, 12000]
+  - [2000, 12300]

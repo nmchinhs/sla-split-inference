@@ -1,0 +1,20 @@
+# CPU-quota calibration: do two devices disturb each other? Run this config on two host CPUs at
+# the same time and compare with one run alone. CPUs 8 and 9 are the two hardware threads of one
+# core; 8 and 10 are different cores.
+#
+#   conda run -n edgeinf python scripts/calibrate_cpu.py experiments/configs/calibration_pair.yaml --cpu 8
+#   (the same with --cpu 9 or --cpu 10, started together with the first)
+seed: 0
+image: edgeinf-device
+cpu: 8
+memory: 512m
+env:
+  GLIBC_TUNABLES: glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
+repeats: 3
+requests: 30
+warmup: 3
+gap_ms: [20, 220]
+models:
+  mobilenetv2: [20]
+settings:       # [quota_us, period_us]
+  - [1000, 4900]

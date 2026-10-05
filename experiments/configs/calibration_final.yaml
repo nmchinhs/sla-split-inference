@@ -1,0 +1,23 @@
+# CPU-quota calibration, final check: the recommended setting and its two neighbours, written as
+# exact whole percents of a CPU so that the kernel enforces exactly what is asked for (Docker's
+# systemd cgroup driver rounds any other share up to the next whole percent). Run on the host:
+#
+#   conda run -n edgeinf python scripts/calibrate_cpu.py experiments/configs/calibration_final.yaml
+seed: 0
+image: edgeinf-device
+cpu: 8          # host CPU the container is pinned to; its sibling thread (9) must be idle
+memory: 512m
+env:
+  GLIBC_TUNABLES: glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
+repeats: 5
+requests: 20
+warmup: 3
+gap_ms: [20, 220]
+models:
+  mobilenetv2: [20, 5]
+  resnet18: [10]
+settings:       # [quota_us, period_us]
+  - [100000, 100000]   # no throttling
+  - [1000, 5000]       # 20%
+  - [1050, 5000]       # 21%, recommended
+  - [1100, 5000]       # 22%

@@ -1,0 +1,24 @@
+# CPU-quota calibration, stage 3: confirm the chosen setting on both models and several split
+# points. Stage 2 (calibration_period.yaml) chose a 1 ms quota; the period sets the speed.
+# 4.9 and 5.1 ms bracket the 105 ms target for MobileNetV2; 9.7 ms is the alternative that matches
+# the published figure for the 1.4x-wide MobileNetV2 (about 200 ms). Run on the host:
+#
+#   conda run -n edgeinf python scripts/calibrate_cpu.py experiments/configs/calibration_check.yaml
+seed: 0
+image: edgeinf-device
+cpu: 8          # host CPU the container is pinned to; its sibling thread (9) must be idle
+memory: 512m
+env:
+  GLIBC_TUNABLES: glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
+repeats: 3
+requests: 20
+warmup: 3
+gap_ms: [20, 220]
+models:         # split points k to time; the last block index + 1 is the whole model
+  mobilenetv2: [20, 12, 5, 1]
+  resnet18: [10, 6]
+settings:       # [quota_us, period_us]
+  - [100000, 100000]   # no throttling
+  - [1000, 4900]
+  - [1000, 5100]
+  - [1000, 9700]
