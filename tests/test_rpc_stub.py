@@ -24,13 +24,22 @@ def test_health_reports_ok_and_empty_queue(edge_addr):
     assert reply is not None
     assert reply.ok
     assert reply.queue_len == 0
+    assert reply.padding_bytes == 0
 
 
-def test_infer_echoes_tensor_size(edge_addr):
+def test_health_probe_echoes_padding_size(edge_addr):
+    with EdgeClient(edge_addr) as client:
+        reply = client.health(padding=bytes(PAYLOAD_BYTES))
+    assert reply is not None
+    assert reply.padding_bytes == PAYLOAD_BYTES
+
+
+def test_infer_accepts_large_tensor_and_reports_edge_time(edge_addr):
     with EdgeClient(edge_addr, device_id="device-1") as client:
         reply = client.infer(bytes(PAYLOAD_BYTES), k=3, request_id=7)
-    assert reply.tensor_bytes == PAYLOAD_BYTES
     assert reply.queue_len == 0
+    assert reply.queue_ms == 0
+    assert reply.compute_ms >= 0
 
 
 def test_unreachable_edge_fails_within_timeout():

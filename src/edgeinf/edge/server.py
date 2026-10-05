@@ -1,6 +1,7 @@
 """Edge gRPC server.
 
-Phase 1 stub: Infer does no inference, it only echoes the size of the received tensor.
+Phase 1 stub: Infer does no inference and returns a placeholder label. Health is complete: it
+also serves as the device's link probe by receiving and discarding padding.
 """
 
 from __future__ import annotations
@@ -40,19 +41,22 @@ class InferenceServicer(pb_grpc.InferenceServicer):
             ahead = self._in_flight
             self._in_flight += 1
         try:
+            # The stub serves a request as soon as it arrives, so it never waits.
             return pb.InferReply(
                 label=-1,
                 confidence=0.0,
                 queue_len=ahead,
-                edge_ms=(time.perf_counter() - start) * MS_PER_S,
-                tensor_bytes=len(request.tensor),
+                queue_ms=0.0,
+                compute_ms=(time.perf_counter() - start) * MS_PER_S,
             )
         finally:
             with self._lock:
                 self._in_flight -= 1
 
     def Health(self, request: pb.HealthRequest, context: grpc.ServicerContext) -> pb.HealthReply:
-        return pb.HealthReply(ok=True, queue_len=self.queue_len())
+        return pb.HealthReply(
+            ok=True, queue_len=self.queue_len(), padding_bytes=len(request.padding)
+        )
 
 
 def start_server(port: int = DEFAULT_EDGE_PORT, host: str = "[::]") -> tuple[grpc.Server, int]:

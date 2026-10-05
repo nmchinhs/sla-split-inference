@@ -4,34 +4,50 @@ package edgeinf;
 
 // Edge inference service. The device runs blocks [0, k) and sends the output of block k-1;
 // the edge runs blocks [k, n) and returns the final prediction.
+//
+// Failures are reported with gRPC status codes, not reply fields: INVALID_ARGUMENT for an
+// unknown model, a k outside [0, n) or a tensor that does not decode; DEADLINE_EXCEEDED when
+// the device's timeout expires. The device treats any error as "edge unavailable" and falls
+// back to local inference.
 service Inference {
   rpc Infer(InferRequest) returns (InferReply);
+  // Liveness check, and the device's link probe (see HealthRequest.padding). It never waits in
+  // the inference queue and is not counted in queue_len.
   rpc Health(HealthRequest) returns (HealthReply);
 }
 
 message Meta {
   string device_id = 1;
-  uint64 request_id = 2;
-  string model = 3;  // e.g. "mobilenetv2", "resnet18"
+  uint64 request_id = 2;  // chosen by the device; ties a reply and the edge's logs to a CSV row
+  string model = 3;       // e.g. "mobilenetv2", "resnet18"
 }
 
 message InferRequest {
-  bytes tensor = 1;  // encoded by common/serialize.py (carries shape and dtype)
-  uint32 k = 2;      // split point: the edge starts at block k
+  // Encoded by common/serialize.py. The encoding is self-describing (shape, dtype), so the
+  // tensor format can change (fp16, quantised) without changing this file.
+  bytes tensor = 1;
+  uint32 k = 2;  // split point, 0 <= k < n: the edge starts at block k (k = 0: tensor is the input)
   Meta meta = 3;
 }
 
 message InferReply {
-  int32 label = 1;          // predicted class index
-  float confidence = 2;     // max softmax of the final output
-  uint32 queue_len = 3;     // other requests at the edge when this one arrived
-  float edge_ms = 4;        // time spent at the edge for this request, in ms
-  uint64 tensor_bytes = 5;  // size of the received tensor field, in bytes
+  int32 label = 1;       // predicted class index
+  float confidence = 2;  // max softmax of the final output
+  uint32 queue_len = 3;  // other Infer requests at the edge (waiting or in service) on arrival
+  // Time at the edge, in ms, in two parts. Their sum is what the device subtracts from the
+  // round trip to get the network time; the split shows whether a slow reply was load or compute.
+  float queue_ms = 4;    // waiting before the edge started on this request
+  float compute_ms = 5;  // decoding the tensor and running blocks [k, n)
 }
 
-message HealthRequest {}
+message HealthRequest {
+  // Optional bytes the edge receives and discards. Empty: the round trip measures RTT. Filled
+  // with a known size: the round trip measures uplink bandwidth without running inference.
+  bytes padding = 1;
+}
 
 message HealthReply {
-  bool ok = 1;
-  uint32 queue_len = 2;  // requests currently at the edge
+  bool ok = 1;               // false while the edge is reachable but not ready to serve
+  uint32 queue_len = 2;      // Infer requests at the edge (waiting or in service) right now
+  uint64 padding_bytes = 3;  // size of the padding received, in bytes
 }

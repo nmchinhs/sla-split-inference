@@ -5,7 +5,8 @@ Run inside a device container, after shaping its egress with scripts/netem.sh:
     docker exec device-1 python scripts/smoke_test.py --expect-mbps 5 --expect-rtt-ms 20
 
 RTT is the median round trip of an empty Health() call. Throughput is payload bits divided
-by the Infer() round trip minus that RTT, so it is the rate seen by the tensor itself.
+by the round trip of a Health() call carrying that payload as padding, minus the RTT, so it
+is the rate seen by the payload itself. No inference runs, so the edge's load does not matter.
 With --expect-* the script exits non-zero if a measurement is out of tolerance.
 """
 
@@ -50,12 +51,14 @@ def measure_throughput_mbps(
     """Achieved uplink throughput in Mbps for each of `repeats` transfers of `payload_bytes`."""
     payload = os.urandom(payload_bytes)
     samples = []
-    for i in range(repeats):
+    for _ in range(repeats):
         start = time.perf_counter()
-        reply = client.infer(payload, k=0, request_id=i)
+        reply = client.health(padding=payload)
         elapsed_s = time.perf_counter() - start
-        if reply.tensor_bytes != payload_bytes:
-            raise RuntimeError(f"edge saw {reply.tensor_bytes} bytes, sent {payload_bytes}")
+        if reply is None:
+            raise RuntimeError("edge is unreachable or unhealthy")
+        if reply.padding_bytes != payload_bytes:
+            raise RuntimeError(f"edge saw {reply.padding_bytes} bytes, sent {payload_bytes}")
         transfer_s = max(elapsed_s - rtt_ms / MS_PER_S, 1e-9)
         samples.append(payload_bytes * BITS_PER_BYTE / transfer_s / BITS_PER_MBIT)
     return samples

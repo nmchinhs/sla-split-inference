@@ -28,6 +28,11 @@ if _version_not_supported:
 class InferenceStub:
     """Edge inference service. The device runs blocks [0, k) and sends the output of block k-1;
     the edge runs blocks [k, n) and returns the final prediction.
+
+    Failures are reported with gRPC status codes, not reply fields: INVALID_ARGUMENT for an
+    unknown model, a k outside [0, n) or a tensor that does not decode; DEADLINE_EXCEEDED when
+    the device's timeout expires. The device treats any error as "edge unavailable" and falls
+    back to local inference.
     """
 
     def __init__(self, channel):
@@ -51,6 +56,11 @@ class InferenceStub:
 class InferenceServicer:
     """Edge inference service. The device runs blocks [0, k) and sends the output of block k-1;
     the edge runs blocks [k, n) and returns the final prediction.
+
+    Failures are reported with gRPC status codes, not reply fields: INVALID_ARGUMENT for an
+    unknown model, a k outside [0, n) or a tensor that does not decode; DEADLINE_EXCEEDED when
+    the device's timeout expires. The device treats any error as "edge unavailable" and falls
+    back to local inference.
     """
 
     def Infer(self, request, context):
@@ -60,7 +70,9 @@ class InferenceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def Health(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Liveness check, and the device's link probe (see HealthRequest.padding). It never waits in
+        the inference queue and is not counted in queue_len.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -89,6 +101,11 @@ def add_InferenceServicer_to_server(servicer, server):
 class Inference:
     """Edge inference service. The device runs blocks [0, k) and sends the output of block k-1;
     the edge runs blocks [k, n) and returns the final prediction.
+
+    Failures are reported with gRPC status codes, not reply fields: INVALID_ARGUMENT for an
+    unknown model, a k outside [0, n) or a tensor that does not decode; DEADLINE_EXCEEDED when
+    the device's timeout expires. The device treats any error as "edge unavailable" and falls
+    back to local inference.
     """
 
     @staticmethod

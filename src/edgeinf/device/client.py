@@ -24,10 +24,15 @@ class EdgeClient:
         self._channel = grpc.insecure_channel(addr, options=GRPC_OPTIONS)
         self._stub = pb_grpc.InferenceStub(self._channel)
 
-    def health(self, timeout_s: float | None = None) -> pb.HealthReply | None:
-        """Return the edge's health reply, or None if it is unreachable or timed out."""
+    def health(self, padding: bytes = b"", timeout_s: float | None = None) -> pb.HealthReply | None:
+        """Return the edge's health reply, or None if it is unreachable or timed out.
+
+        `padding` is discarded by the edge. Timing the call with it empty measures RTT; with a
+        known number of bytes it measures uplink bandwidth without running inference.
+        """
+        request = pb.HealthRequest(padding=padding)
         try:
-            return self._stub.Health(pb.HealthRequest(), timeout=timeout_s or self.timeout_s)
+            return self._stub.Health(request, timeout=timeout_s or self.timeout_s)
         except grpc.RpcError:
             return None
 

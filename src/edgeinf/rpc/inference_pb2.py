@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1b\x65\x64geinf/rpc/inference.proto\x12\x07\x65\x64geinf\"<\n\x04Meta\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x12\n\nrequest_id\x18\x02 \x01(\x04\x12\r\n\x05model\x18\x03 \x01(\t\"F\n\x0cInferRequest\x12\x0e\n\x06tensor\x18\x01 \x01(\x0c\x12\t\n\x01k\x18\x02 \x01(\r\x12\x1b\n\x04meta\x18\x03 \x01(\x0b\x32\r.edgeinf.Meta\"i\n\nInferReply\x12\r\n\x05label\x18\x01 \x01(\x05\x12\x12\n\nconfidence\x18\x02 \x01(\x02\x12\x11\n\tqueue_len\x18\x03 \x01(\r\x12\x0f\n\x07\x65\x64ge_ms\x18\x04 \x01(\x02\x12\x14\n\x0ctensor_bytes\x18\x05 \x01(\x04\"\x0f\n\rHealthRequest\",\n\x0bHealthReply\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x11\n\tqueue_len\x18\x02 \x01(\r2x\n\tInference\x12\x33\n\x05Infer\x12\x15.edgeinf.InferRequest\x1a\x13.edgeinf.InferReply\x12\x36\n\x06Health\x12\x16.edgeinf.HealthRequest\x1a\x14.edgeinf.HealthReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1b\x65\x64geinf/rpc/inference.proto\x12\x07\x65\x64geinf\"<\n\x04Meta\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x12\n\nrequest_id\x18\x02 \x01(\x04\x12\r\n\x05model\x18\x03 \x01(\t\"F\n\x0cInferRequest\x12\x0e\n\x06tensor\x18\x01 \x01(\x0c\x12\t\n\x01k\x18\x02 \x01(\r\x12\x1b\n\x04meta\x18\x03 \x01(\x0b\x32\r.edgeinf.Meta\"h\n\nInferReply\x12\r\n\x05label\x18\x01 \x01(\x05\x12\x12\n\nconfidence\x18\x02 \x01(\x02\x12\x11\n\tqueue_len\x18\x03 \x01(\r\x12\x10\n\x08queue_ms\x18\x04 \x01(\x02\x12\x12\n\ncompute_ms\x18\x05 \x01(\x02\" \n\rHealthRequest\x12\x0f\n\x07padding\x18\x01 \x01(\x0c\"C\n\x0bHealthReply\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x11\n\tqueue_len\x18\x02 \x01(\r\x12\x15\n\rpadding_bytes\x18\x03 \x01(\x04\x32x\n\tInference\x12\x33\n\x05Infer\x12\x15.edgeinf.InferRequest\x1a\x13.edgeinf.InferReply\x12\x36\n\x06Health\x12\x16.edgeinf.HealthRequest\x1a\x14.edgeinf.HealthReplyb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,11 +36,11 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_INFERREQUEST']._serialized_start=102
   _globals['_INFERREQUEST']._serialized_end=172
   _globals['_INFERREPLY']._serialized_start=174
-  _globals['_INFERREPLY']._serialized_end=279
-  _globals['_HEALTHREQUEST']._serialized_start=281
-  _globals['_HEALTHREQUEST']._serialized_end=296
-  _globals['_HEALTHREPLY']._serialized_start=298
-  _globals['_HEALTHREPLY']._serialized_end=342
-  _globals['_INFERENCE']._serialized_start=344
-  _globals['_INFERENCE']._serialized_end=464
+  _globals['_INFERREPLY']._serialized_end=278
+  _globals['_HEALTHREQUEST']._serialized_start=280
+  _globals['_HEALTHREQUEST']._serialized_end=312
+  _globals['_HEALTHREPLY']._serialized_start=314
+  _globals['_HEALTHREPLY']._serialized_end=381
+  _globals['_INFERENCE']._serialized_start=383
+  _globals['_INFERENCE']._serialized_end=503
 # @@protoc_insertion_point(module_scope)
