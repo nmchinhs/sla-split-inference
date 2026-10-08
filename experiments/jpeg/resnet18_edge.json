@@ -1,0 +1,78 @@
+{
+ "tier": "edge",
+ "split": "val",
+ "qualities": [
+  50,
+  75,
+  90,
+  95
+ ],
+ "requests": 100,
+ "warmup": 10,
+ "date": "2026-10-08",
+ "torch": "2.14.1+cu130",
+ "cpu_max": "max 100000",
+ "model": "resnet18",
+ "checkpoint": "checkpoints/train_resnet18.pt",
+ "device": "NVIDIA GeForce RTX 4050 Laptop GPU",
+ "tf32": false,
+ "max_drop_points": 0.5,
+ "frames": 947,
+ "raw": {
+  "accuracy": 0.8901795142555439,
+  "bytes": 150550,
+  "edge_ms": 1.8507999993744306,
+  "edge_p95_ms": 1.9918360012525227
+ },
+ "jpeg": {
+  "50": {
+   "accuracy": 0.8912354804646251,
+   "accuracy_drop_points": -0.10559662090812161,
+   "labels_changed": 13,
+   "bytes_mean": 6775.059134107709,
+   "bytes_median": 6767,
+   "bytes_p95": 9677,
+   "bytes_min": 1517,
+   "bytes_max": 13787,
+   "edge_ms": 2.3836849995859666,
+   "edge_p95_ms": 2.48609800109989
+  },
+  "75": {
+   "accuracy": 0.8912354804646251,
+   "accuracy_drop_points": -0.10559662090812161,
+   "labels_changed": 7,
+   "bytes_mean": 9747.531151003168,
+   "bytes_median": 9748,
+   "bytes_p95": 14133,
+   "bytes_min": 1771,
+   "bytes_max": 19881,
+   "edge_ms": 2.409499000350479,
+   "edge_p95_ms": 2.524341001844732
+  },
+  "90": {
+   "accuracy": 0.8891235480464625,
+   "accuracy_drop_points": 0.10559662090813271,
+   "labels_changed": 9,
+   "bytes_mean": 15732.046462513199,
+   "bytes_median": 15707,
+   "bytes_p95": 22755,
+   "bytes_min": 2697,
+   "bytes_max": 31031,
+   "edge_ms": 2.4305735005327733,
+   "edge_p95_ms": 2.5008359989442397
+  },
+  "95": {
+   "accuracy": 0.8901795142555439,
+   "accuracy_drop_points": 0.0,
+   "labels_changed": 3,
+   "bytes_mean": 21753.182682154173,
+   "bytes_median": 21732,
+   "bytes_p95": 31037,
+   "bytes_min": 4043,
+   "bytes_max": 41501,
+   "edge_ms": 2.484389999153791,
+   "edge_p95_ms": 2.6027590029116254
+  }
+ },
+ "chosen_quality": 50
+}

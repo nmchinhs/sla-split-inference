@@ -38,5 +38,6 @@ RUN mkdir -p src/edgeinf/rpc && touch src/edgeinf/rpc/__init__.py \
 # its speed depends on what the process allocated earlier (experiments/calibration.md).
 ENV GLIBC_TUNABLES=glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
 
-# Idle until a script is exec'd in (smoke test now, device/client.py runtime later).
+# Idle until something is exec'd in: the device agent (python -m edgeinf.device.client, started
+# by scripts/run_experiment.py), the smoke test or a profiler.
 CMD ["sleep", "infinity"]

@@ -13,6 +13,7 @@ REQUIRED_MODULES = (
     "pandas",
     "matplotlib",
     "yaml",
+    "PIL",  # Pillow: comes with torchvision; encodes and decodes the JPEG of offload_jpeg
     "edgeinf",
 )
 

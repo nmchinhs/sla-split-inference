@@ -1,0 +1,23 @@
+# Calibration check with the real device runtime (PLAN.md Phase 2 step 7): local inference back
+# to back, as in experiments/calibration.md, where the probe measured the bare model. The link is
+# not used.
+#
+#   conda run --no-capture-output -n edgeinf python scripts/run_experiment.py experiments/configs/calibration_runtime_resnet18.yaml --force
+#
+# Writes results/calibration_runtime_resnet18/. About a minute.
+seed: 0
+model: resnet18
+checkpoint: checkpoints/train_resnet18.pt
+frames: data/frames
+split: val                 # any frames do: only the time is looked at
+devices: [device-1]
+variants: [local]
+jpeg_quality: null
+rate_hz: null              # back to back: each request starts when the one before it ends
+traces: [static_50mbps]
+repeats: 5
+rounds: 1
+block_requests: 40
+block_warmup: 3
+warmup_requests: 10
+rpc_timeout_s: 5.0

@@ -1,0 +1,22 @@
+# Smoke run of the baselines: one repeat at the lowest and the highest bandwidth, few requests.
+# It shows that device, edge, link shaping and logging work together; it is not a result.
+#
+#   conda run --no-capture-output -n edgeinf python scripts/run_experiment.py experiments/configs/smoke_resnet18.yaml --force
+#
+# Writes results/smoke_resnet18/. About two minutes.
+seed: 0
+model: resnet18
+checkpoint: checkpoints/train_resnet18.pt
+frames: data/frames
+split: test
+devices: [device-1]
+variants: [local, offload, offload_jpeg]
+jpeg_quality: 50           # lowest quality that costs < 0.5 points on val (experiments/jpeg/)
+rate_hz: 2
+traces: [static_1mbps, static_50mbps]
+repeats: 1
+rounds: 1
+block_requests: 20
+block_warmup: 5
+warmup_requests: 50
+rpc_timeout_s: 5.0

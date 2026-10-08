@@ -6,6 +6,10 @@ exit profiles are calibrated on val, and results are reported on test only.
 
 The 320 px version of the dataset is used: its images have a shorter side of 320 px, which is
 enough for 224x224 crops.
+
+A device does not read dataset files. It gets frames: the val or test images already resized and
+cropped, as 8-bit pixels, written once by `export_frames` (scripts/export_frames.py). Decoding and
+resizing a photo is the camera's work and must not count as inference time.
 """
 
 from __future__ import annotations
@@ -16,7 +20,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
+from PIL import Image
 from torch.utils.data import Dataset, Subset
 from torchvision import datasets, transforms
 
@@ -47,7 +53,12 @@ STD = (0.229, 0.224, 0.225)
 PIXEL_MAX = 255.0  # largest value of an 8-bit pixel
 RESIZE = 256  # px, shorter side before the centre crop of val and test images
 MIN_CROP_AREA = 0.35  # smallest random crop of a training image, as a fraction of its area
+FRAMES_DIRNAME = "frames"  # folder under the data root that holds the exported frames
+FRAMES_FILE = "{split}_frames.npy"  # uint8, shape (N, 3, 224, 224)
+LABELS_FILE = "{split}_labels.npy"  # int64, shape (N,)
+FRAME_SPLITS = ("val", "test")  # the splits whose images are the same on every read
 
+_CROP = [transforms.Resize(RESIZE), transforms.CenterCrop(INPUT_SIZE)]
 _NORMALISE = [transforms.ToTensor(), transforms.Normalize(MEAN, STD)]
 TRAIN_TRANSFORM = transforms.Compose(
     [
@@ -56,9 +67,8 @@ TRAIN_TRANSFORM = transforms.Compose(
         *_NORMALISE,
     ]
 )
-EVAL_TRANSFORM = transforms.Compose(
-    [transforms.Resize(RESIZE), transforms.CenterCrop(INPUT_SIZE), *_NORMALISE]
-)
+EVAL_TRANSFORM = transforms.Compose([*_CROP, *_NORMALISE])
+FRAME_TRANSFORM = transforms.Compose([*_CROP, transforms.PILToTensor()])  # 8-bit, not normalised
 
 
 def stratified_split(
@@ -92,10 +102,15 @@ class Splits:
     val: Dataset
     test: Dataset
     _files: dict[str, list[str]]
+    _labels: dict[str, list[int]]
 
     def files(self, split: str) -> list[str]:
         """Image paths of "train", "val" or "test", in dataset order."""
         return self._files[split]
+
+    def labels(self, split: str) -> list[int]:
+        """Class indices of "train", "val" or "test", in dataset order."""
+        return self._labels[split]
 
 
 def download(root: str | Path) -> None:
@@ -131,7 +146,54 @@ def load_splits(root: str | Path, seed: int, val_fraction: float) -> Splits:
             "val": [paths[i] for i in val_idx],
             "test": [path for path, _ in test.samples],
         },
+        _labels={
+            "train": [augmented.targets[i] for i in train_idx],
+            "val": [augmented.targets[i] for i in val_idx],
+            "test": list(test.targets),
+        },
     )
+
+
+def export_frames(splits: Splits, split: str, directory: str | Path) -> Path:
+    """Write the images of "val" or "test" as 8-bit frames, and their labels, into `directory`.
+
+    A frame is the image resized and centre-cropped as in EVAL_TRANSFORM but left as 8-bit
+    pixels, so `normalise(frame)` is exactly what the models were trained and evaluated on.
+    Returns the path of the frames file (150,528 bytes per image).
+    """
+    if split not in FRAME_SPLITS:
+        raise ValueError(f"frames exist for {FRAME_SPLITS}, not for {split!r}")
+    files = splits.files(split)
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / FRAMES_FILE.format(split=split)
+    shape = (len(files), 3, INPUT_SIZE, INPUT_SIZE)
+    frames = np.lib.format.open_memmap(path, mode="w+", dtype=np.uint8, shape=shape)
+    for index, file in enumerate(files):
+        with Image.open(file) as image:
+            frames[index] = FRAME_TRANSFORM(image.convert("RGB")).numpy()
+    frames.flush()
+    np.save(directory / LABELS_FILE.format(split=split), np.asarray(splits.labels(split)))
+    return path
+
+
+def load_frames(directory: str | Path, split: str) -> tuple[np.ndarray, np.ndarray]:
+    """Frames and labels written by `export_frames`: uint8 (N, 3, 224, 224) and int64 (N,).
+
+    The frames are memory-mapped and read-only, so only the ones that are used are read: the
+    test split is 591 MB, more than a device container has.
+    """
+    directory = Path(directory)
+    try:
+        frames = np.load(directory / FRAMES_FILE.format(split=split), mmap_mode="r")
+        labels = np.load(directory / LABELS_FILE.format(split=split))
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            f"no {split} frames in {directory}: write them first (scripts/export_frames.py)"
+        ) from error
+    if frames.dtype != np.uint8 or frames.shape != (len(labels), 3, INPUT_SIZE, INPUT_SIZE):
+        raise ValueError(f"{directory}: {split} frames have shape {frames.shape}, {frames.dtype}")
+    return frames, labels
 
 
 def normalise(image: torch.Tensor) -> torch.Tensor:

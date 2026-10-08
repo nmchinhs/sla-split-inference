@@ -4,7 +4,7 @@ import pytest
 import torch
 import torchvision
 
-from edgeinf.models.multi_exit import MODEL_NAMES, NUM_CLASSES, build_model
+from edgeinf.models.multi_exit import MODEL_NAMES, NUM_CLASSES, build_model, load_checkpoint
 
 SEED = 0
 OTHER_SEED = 1
@@ -161,3 +161,31 @@ def test_add_exit_rejects_invalid_positions(name):
     model.add_exit(EXIT_AFTER, _dummy_head())
     with pytest.raises(ValueError):
         model.add_exit(EXIT_AFTER, _dummy_head())
+
+
+@pytest.mark.parametrize("name", MODEL_NAMES)
+def test_load_checkpoint_rebuilds_the_trained_model_ready_for_inference(
+    name, image, settle_batchnorm, tmp_path
+):
+    torch.manual_seed(SEED)
+    trained = build_model(name).eval()
+    settle_batchnorm(trained)  # BatchNorm statistics are part of what a checkpoint must restore
+    expected = trained(image)
+    assert expected.abs().max() > MIN_LOGIT
+    # The file layout that scripts/train_backbone.py writes.
+    path = tmp_path / "trained.pt"
+    torch.save({"model": name, "state_dict": trained.state_dict(), "epochs": 1}, path)
+
+    torch.manual_seed(OTHER_SEED)  # so a model that kept its fresh weights would differ
+    model = load_checkpoint(path)
+
+    assert model.name == name
+    assert not model.training
+    assert torch.equal(model(image), expected)
+
+
+def test_load_checkpoint_refuses_a_file_that_is_not_one_of_ours(tmp_path):
+    path = tmp_path / "weights.pt"
+    torch.save(build_model("resnet18").state_dict(), path)
+    with pytest.raises(ValueError, match="train_backbone"):
+        load_checkpoint(path)

@@ -79,3 +79,22 @@ def test_edge_has_gpu_and_keeps_to_the_reserved_cpus():
 def test_rejects_device_counts_that_do_not_fit(n_devices):
     with pytest.raises(ValueError):
         gen_compose.build_compose(n_devices, PAIRED)
+
+
+def test_edge_is_given_the_checkpoints_and_told_which_to_serve():
+    edge = gen_compose.build_compose(1, PAIRED)["services"]["edge"]
+    assert edge["volumes"] == ["./checkpoints:/app/checkpoints:ro"]
+    served = edge["environment"]["EDGE_CHECKPOINTS"].split(",")
+    assert served == ["checkpoints/train_mobilenetv2.pt", "checkpoints/train_resnet18.pt"]
+    # Every file it is told to serve is inside the folder it is given.
+    assert all(path.startswith("checkpoints/") for path in served)
+
+
+def test_devices_are_given_checkpoints_and_frames_read_only():
+    services = gen_compose.build_compose(3, PAIRED)["services"]
+    for i in range(1, 4):
+        volumes = services[f"device-{i}"]["volumes"]
+        assert volumes == ["./checkpoints:/app/checkpoints:ro", "./data/frames:/app/data/frames:ro"]
+        # A device has no dataset and writes nothing to the host.
+        assert all(volume.endswith(":ro") for volume in volumes)
+        assert not any("imagenette" in volume or "results" in volume for volume in volumes)

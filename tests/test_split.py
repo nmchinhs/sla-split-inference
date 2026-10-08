@@ -3,9 +3,10 @@
 import pytest
 import torch
 
-from edgeinf.common.serialize import deserialize, serialize
+from edgeinf.common.serialize import deserialize, serialize, serialize_jpeg
+from edgeinf.data.imagenette import normalise
 from edgeinf.models.multi_exit import MODEL_NAMES, MultiExitModel, build_model
-from edgeinf.models.split import run_blocks
+from edgeinf.models.split import pack, run_blocks, run_head, run_tail, top1
 
 SEED = 0
 BYTES_PER_KB = 1024
@@ -20,6 +21,9 @@ FP16_MAX_LOGIT_ERROR = 0.01
 # the tensor travels as 16-bit floats, and the size of the smallest such tensor.
 SPLITS_SMALLER_THAN_IMAGE = {"mobilenetv2": 15, "resnet18": 4}
 SMALLEST_SPLIT_KB = {"mobilenetv2": 15.3, "resnet18": 49.0}
+JPEG_QUALITY = 90
+HEADER_BYTES_4D = 22  # of a serialised 4-D tensor
+FP16_BYTES = 2
 
 
 @pytest.fixture(autouse=True)
@@ -100,3 +104,61 @@ def test_split_tensor_sizes_match_the_feasibility_study(model, image):
 
     assert sum(size < image_bytes for size in sizes) == SPLITS_SMALLER_THAN_IMAGE[model.name]
     assert round(min(sizes) / BYTES_PER_KB, 1) == SMALLEST_SPLIT_KB[model.name]
+
+
+def test_head_is_the_frame_itself_at_k_0_and_the_normalised_blocks_after(model, frame):
+    assert run_head(model, frame, 0) is frame
+    x = normalise(frame)
+    for k in range(1, model.num_blocks + 1):
+        assert torch.equal(run_head(model, frame, k), run_blocks(model, x, 0, k))
+
+
+def test_head_then_tail_is_the_whole_model_for_every_k(model, frame):
+    # This is also the device's fallback: it finishes with run_tail on the tensor it has.
+    full = model(normalise(frame))
+    assert full.abs().max() > MIN_LOGIT
+    for k in range(model.num_blocks + 1):
+        logits = run_tail(model, run_head(model, frame, k), k)
+        assert torch.allclose(logits, full), f"{model.name}: k={k} differs"
+
+
+def test_tail_normalises_only_the_raw_frame(model, frame):
+    n = model.num_blocks
+    assert torch.equal(run_tail(model, frame, 0), run_blocks(model, normalise(frame), 0, n))
+    logits = run_head(model, frame, n)
+    assert run_tail(model, logits, n) is logits
+
+
+def test_top1_is_the_largest_softmax_and_its_index():
+    label, confidence = top1(torch.tensor([[1.0, 3.0, 2.0]]))
+    assert isinstance(label, int) and isinstance(confidence, float)
+    assert label == 1
+    assert confidence == pytest.approx(torch.tensor([1.0, 3.0, 2.0]).softmax(0)[1].item())
+
+
+def test_pack_sends_the_raw_frame_at_k_0_and_16_bit_floats_after(model, frame):
+    assert pack(frame, 0) == serialize(frame)
+    for k in range(1, model.num_blocks):
+        x = run_head(model, frame, k)
+        data = pack(x, k)
+        assert data == serialize(x, fp16=True)
+        assert len(data) == HEADER_BYTES_4D + FP16_BYTES * x.numel()
+
+
+def test_pack_sends_a_jpeg_at_k_0_when_a_quality_is_given(frame):
+    assert pack(frame, 0, jpeg_quality=JPEG_QUALITY) == serialize_jpeg(frame, JPEG_QUALITY)
+    assert len(pack(frame, 0, jpeg_quality=JPEG_QUALITY)) < len(pack(frame, 0))
+
+
+def test_pack_refuses_a_jpeg_of_anything_but_the_frame(model, frame):
+    with pytest.raises(ValueError, match="k = 0"):
+        pack(run_head(model, frame, 1), 1, jpeg_quality=JPEG_QUALITY)
+
+
+def test_what_is_packed_gives_the_whole_models_label_at_the_other_end(model, frame):
+    label, confidence = top1(model(normalise(frame)))
+    for k in range(model.num_blocks):
+        received = deserialize(pack(run_head(model, frame, k), k))
+        got_label, got_confidence = top1(run_tail(model, received, k))
+        assert got_label == label, f"{model.name}: k={k}"
+        assert got_confidence == pytest.approx(confidence, rel=FP16_MAX_LOGIT_ERROR)

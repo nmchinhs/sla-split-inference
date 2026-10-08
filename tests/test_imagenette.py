@@ -1,8 +1,10 @@
 """Imagenette loading (data/imagenette.py): the 90/10 stratified split and the three splits."""
 
+import importlib.util
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from PIL import Image
@@ -15,11 +17,14 @@ from edgeinf.data.imagenette import (
     INPUT_SIZE,
     RESIZE,
     WNIDS,
+    export_frames,
+    load_frames,
     load_splits,
     normalise,
     stratified_split,
 )
 
+EXPORT_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "export_frames.py"
 SEED = 0
 OTHER_SEED = 1
 VAL_FRACTION = 0.1
@@ -128,3 +133,68 @@ def test_normalising_an_8_bit_frame_reproduces_the_dataset_transform(root):
 def test_missing_dataset_gives_a_clear_error(tmp_path):
     with pytest.raises(FileNotFoundError, match="download"):
         load_splits(tmp_path, SEED, VAL_FRACTION)
+
+
+def test_labels_are_listed_in_dataset_order(root):
+    splits = load_splits(root, SEED, VAL_FRACTION)
+    for name, dataset in (("val", splits.val), ("test", splits.test)):
+        assert splits.labels(name) == [dataset[i][1] for i in range(len(dataset))]
+        assert len(splits.labels(name)) == len(splits.files(name))
+    assert len(splits.labels("train")) == len(splits.train)
+
+
+@pytest.mark.parametrize("split", ["val", "test"])
+def test_exported_frames_are_the_dataset_images_before_normalisation(root, tmp_path, split):
+    splits = load_splits(root, SEED, VAL_FRACTION)
+    dataset = getattr(splits, split)
+
+    export_frames(splits, split, tmp_path / "frames")
+    frames, labels = load_frames(tmp_path / "frames", split)
+
+    assert frames.shape == (len(dataset), 3, INPUT_SIZE, INPUT_SIZE)
+    assert frames.dtype == np.uint8
+    assert isinstance(frames, np.memmap)  # the test split does not fit in a device's memory
+    assert labels.tolist() == splits.labels(split)
+    for index in (0, len(dataset) // 2, len(dataset) - 1):
+        frame = torch.from_numpy(frames[index : index + 1].copy())
+        image, label = dataset[index]
+        assert torch.allclose(normalise(frame)[0], image, atol=1e-6)
+        assert labels[index] == label
+
+
+def test_training_images_are_not_exported(root, tmp_path):
+    # They are cropped at random on every read, so there is no fixed frame to write.
+    with pytest.raises(ValueError, match="train"):
+        export_frames(load_splits(root, SEED, VAL_FRACTION), "train", tmp_path)
+
+
+def test_missing_frames_give_a_clear_error(tmp_path):
+    with pytest.raises(FileNotFoundError, match="export_frames"):
+        load_frames(tmp_path, "test")
+
+
+@pytest.mark.parametrize(("arguments", "written"), [([], ["test", "val"]), (["val"], ["val"])])
+def test_the_export_script_writes_the_splits_of_a_training_config(
+    root, tmp_path, monkeypatch, arguments, written
+):
+    spec = importlib.util.spec_from_file_location("export_frames", EXPORT_SCRIPT)
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    # The dataset is copied in name only: the frames must land next to it, under frames/.
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    (data_root / DIRNAME).symlink_to(root / DIRNAME)
+    config = tmp_path / "train.yaml"
+    config.write_text(f"data_root: {data_root}\nseed: {SEED}\nval_fraction: {VAL_FRACTION}\n")
+    monkeypatch.setattr("sys.argv", ["export_frames.py", str(config), *arguments])
+
+    script.main()
+
+    files = sorted(path.name for path in (data_root / "frames").iterdir())
+    assert files == sorted(
+        f"{split}_{kind}.npy" for split in written for kind in ("frames", "labels")
+    )
+    splits = load_splits(root, SEED, VAL_FRACTION)
+    for split in written:
+        frames, labels = load_frames(data_root / "frames", split)
+        assert len(frames) == len(splits.files(split)) and labels.tolist() == splits.labels(split)

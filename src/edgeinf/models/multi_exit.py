@@ -14,6 +14,7 @@ and the model is a plain backbone.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 import torch
 import torchvision
@@ -103,3 +104,13 @@ def build_model(name: str, num_classes: int = NUM_CLASSES) -> MultiExitModel:
     if name not in _BUILDERS:
         raise ValueError(f"unknown model {name!r}; expected one of {MODEL_NAMES}")
     return MultiExitModel(name, _BUILDERS[name](num_classes))
+
+
+def load_checkpoint(path: str | Path) -> MultiExitModel:
+    """The model saved by scripts/train_backbone.py at `path`, on the CPU and in eval mode."""
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(checkpoint, dict) or not {"model", "state_dict"} <= set(checkpoint):
+        raise ValueError(f"{path} is not a checkpoint written by scripts/train_backbone.py")
+    model = build_model(checkpoint["model"])
+    model.load_state_dict(checkpoint["state_dict"])
+    return model.eval()

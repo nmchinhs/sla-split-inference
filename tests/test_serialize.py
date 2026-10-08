@@ -1,13 +1,15 @@
 """Tensor <-> bytes for the device-to-edge transfer (common/serialize.py)."""
 
+import io
 import math
 import struct
 import warnings
 
 import pytest
 import torch
+from PIL import Image
 
-from edgeinf.common.serialize import deserialize, serialize
+from edgeinf.common.serialize import deserialize, serialize, serialize_jpeg
 
 SEED = 0
 IMAGE_SHAPE = (1, 3, 224, 224)  # model input
@@ -31,6 +33,14 @@ FP16_SMALLEST = 2.0**-24  # smallest positive 16-bit float (about 6e-8)
 FP16_MAX_REL_ERROR = 2.0**-11  # round to nearest with an 11-bit significand
 FP16_SUBNORMAL_ERROR = 2.0**-25  # half the spacing of 16-bit floats below 2**-14
 ACTIVATION_SCALE = 6.0  # same order as ReLU6 outputs
+PHOTO_SHAPE = (1, 3, 96, 160)  # not square, so swapped axes cannot pass
+JPEG_QUALITIES = (50, 75, 90, 95)
+JPEG_HEADER = b"ET" + bytes([2])  # magic and format version 2: the rest is a JPEG file
+JPEG_START, JPEG_END = b"\xff\xd8", b"\xff\xd9"  # markers that open and close a JPEG file
+# Mean absolute error in grey levels (0..255) of the smooth test image after a round trip at
+# quality 90. Measured: 0.8, and 1.1 in the worst channel. Two swapped channels give 57.
+JPEG_MAX_MEAN_ERROR = 2.0
+JPEG_MIN_SAVING = 5  # the test image must shrink at least this many times at every quality
 
 
 def _random(shape: tuple[int, ...], dtype: torch.dtype = torch.float32) -> torch.Tensor:
@@ -40,6 +50,19 @@ def _random(shape: tuple[int, ...], dtype: torch.dtype = torch.float32) -> torch
     info = torch.iinfo(dtype)
     low, high = max(info.min, -(2**31)), min(info.max, 2**31 - 1)
     return torch.randint(low, high + 1, shape, generator=generator).to(dtype)
+
+
+def _photo(shape: tuple[int, ...] = PHOTO_SHAPE) -> torch.Tensor:
+    """A smooth 8-bit RGB image with three different channels, as JPEG is made for."""
+    _, _, height, width = shape
+    y = torch.linspace(0, 1, height).view(height, 1).expand(height, width)
+    x = torch.linspace(0, 1, width).view(1, width).expand(height, width)
+    wave = 0.5 + 0.5 * torch.sin(2 * math.pi * x) * torch.cos(2 * math.pi * y)
+    return (255 * torch.stack([x, y, wave])).round().to(torch.uint8).unsqueeze(0)
+
+
+def _mean_error(a: torch.Tensor, b: torch.Tensor) -> float:
+    return (a.float() - b.float()).abs().mean().item()
 
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=str)
@@ -153,5 +176,101 @@ def test_the_malformed_cases_start_from_a_valid_encoding():
 
 @pytest.mark.parametrize("data", MALFORMED.values(), ids=MALFORMED.keys())
 def test_deserialize_rejects_malformed_bytes(data):
+    with pytest.raises(ValueError):
+        deserialize(data)
+
+
+def test_jpeg_round_trip_keeps_shape_and_dtype_and_stays_close():
+    image = _photo()
+    restored = deserialize(serialize_jpeg(image, quality=90))
+    assert restored.dtype == torch.uint8
+    assert restored.shape == image.shape
+    assert _mean_error(restored, image) < JPEG_MAX_MEAN_ERROR
+    # Each channel on its own, so that a swap of two channels cannot hide in the mean.
+    for channel in range(3):
+        assert _mean_error(restored[:, channel], image[:, channel]) < JPEG_MAX_MEAN_ERROR
+
+
+def test_jpeg_is_much_smaller_than_the_raw_image_and_grows_with_quality():
+    image = _photo()
+    sizes = [len(serialize_jpeg(image, quality)) for quality in JPEG_QUALITIES]
+    assert sizes == sorted(sizes) and len(set(sizes)) == len(sizes)
+    assert max(sizes) * JPEG_MIN_SAVING < len(serialize(image))
+
+
+def test_a_higher_jpeg_quality_is_closer_to_the_original():
+    image = _photo()
+    errors = [_mean_error(deserialize(serialize_jpeg(image, q)), image) for q in JPEG_QUALITIES]
+    assert errors == sorted(errors, reverse=True)
+    assert errors[-1] < errors[0]
+
+
+def test_jpeg_wire_format_is_pinned():
+    # Version 2 of the format: the three header bytes, then one complete JPEG file.
+    data = serialize_jpeg(_photo(), quality=75)
+    assert data[: len(JPEG_HEADER)] == JPEG_HEADER
+    jpeg = data[len(JPEG_HEADER) :]
+    assert jpeg[:2] == JPEG_START and jpeg[-2:] == JPEG_END
+    with Image.open(io.BytesIO(jpeg)) as decoded:
+        assert decoded.format == "JPEG"
+        assert decoded.size == (PHOTO_SHAPE[3], PHOTO_SHAPE[2])  # PIL gives (width, height)
+        assert decoded.mode == "RGB"
+
+
+def test_jpeg_encoding_is_deterministic():
+    image = _photo()
+    assert serialize_jpeg(image, quality=75) == serialize_jpeg(image, quality=75)
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        _photo().float(),  # not 8-bit
+        _photo()[0],  # no batch dimension
+        _photo().repeat(2, 1, 1, 1),  # two images
+        _photo()[:, :1],  # one channel
+    ],
+    ids=["float", "3-D", "batch of 2", "1 channel"],
+)
+def test_serialize_jpeg_rejects_what_is_not_one_8_bit_rgb_image(image):
+    with pytest.raises(ValueError):
+        serialize_jpeg(image, quality=75)
+
+
+@pytest.mark.parametrize("quality", [0, 101, -1])
+def test_serialize_jpeg_rejects_a_quality_outside_1_to_100(quality):
+    with pytest.raises(ValueError, match="quality"):
+        serialize_jpeg(_photo(), quality)
+
+
+def test_deserialize_jpeg_returns_an_independent_writable_tensor():
+    image = _photo()
+    data = serialize_jpeg(image, quality=90)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        restored = deserialize(data)
+        expected = restored.clone()
+        restored.add_(1)
+    assert torch.equal(deserialize(data), expected)
+
+
+def _png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+_VALID_JPEG = serialize_jpeg(_photo(), quality=75)
+MALFORMED_JPEG = {
+    "header only": JPEG_HEADER,
+    "not a jpeg": JPEG_HEADER + bytes(range(256)),
+    "truncated jpeg": _VALID_JPEG[: len(_VALID_JPEG) // 2],
+    "another image format": JPEG_HEADER + _png(),
+    "jpeg without the header": _VALID_JPEG[len(JPEG_HEADER) :],
+}
+
+
+@pytest.mark.parametrize("data", MALFORMED_JPEG.values(), ids=MALFORMED_JPEG.keys())
+def test_deserialize_rejects_malformed_jpeg(data):
     with pytest.raises(ValueError):
         deserialize(data)
