@@ -33,5 +33,10 @@ RUN mkdir -p src/edgeinf/rpc && touch src/edgeinf/rpc/__init__.py \
     && python -m grpc_tools.protoc -Iedgeinf/rpc=proto --python_out=src --grpc_python_out=src \
        proto/inference.proto
 
+# Pin glibc malloc: keep freed tensors for reuse instead of returning them to the kernel and
+# faulting them in again on every inference. Without this MobileNetV2 is about a third slower and
+# its speed depends on what the process allocated earlier (experiments/calibration.md).
+ENV GLIBC_TUNABLES=glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456
+
 # Idle until a script is exec'd in (smoke test now, device/client.py runtime later).
 CMD ["sleep", "infinity"]

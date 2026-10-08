@@ -12,8 +12,8 @@ in `experiments/configs/calibration_*.yaml`, one summary per config is in
 | Memory allocator of a device | `GLIBC_TUNABLES=glibc.malloc.mmap_threshold=33554432:glibc.malloc.trim_threshold=268435456` | glibc defaults |
 | Pinning | one device per physical core while there are enough cores (CPUs 2, 4, 6, ...) | consecutive CPUs (2, 3, 4, 5), which are pairs of threads on one core |
 
-**Status: measured and recommended, not yet applied.** `scripts/gen_compose.py` and
-`docker/Dockerfile.device` are unchanged.
+**Status: applied on 2026-10-08.** The CPU limit and the pinning order are in
+`scripts/gen_compose.py`, the allocator setting in `docker/Dockerfile.device`.
 
 With these settings one MobileNetV2 inference at 224x224 takes about **101 ms** on the device when
 requests arrive back to back and about 98 ms when they are separated by idle time. ResNet-18 takes
