@@ -1,0 +1,19 @@
+# Backbone training (PLAN.md Phase 2 step 4). Run on the host, in your own terminal:
+#
+#   conda run --no-capture-output -n edgeinf python scripts/train_backbone.py experiments/configs/train_resnet18.yaml --download
+#
+# Writes checkpoints/train_resnet18.pt and results/training/train_resnet18.csv.
+seed: 0
+model: resnet18
+data_root: data          # the dataset is unpacked to data/imagenette2-320 (not in git)
+val_fraction: 0.1        # of the dataset's train folder, stratified by class
+epochs: 40
+batch_size: 64
+lr: 0.1                 # peak learning rate of SGD with Nesterov momentum
+momentum: 0.9
+weight_decay: 0.00005
+label_smoothing: 0.1
+warmup_epochs: 2         # linear warm-up, then cosine decay to zero
+workers: 8               # data-loading processes
+device: cuda
+amp: true                # mixed precision: faster and less GPU memory

@@ -11,6 +11,9 @@ spec.loader.exec_module(gen_compose)
 N_CPUS = 16
 PAIRED = [cpu // 2 for cpu in range(N_CPUS)]  # CPUs 0-1 are core 0, 2-3 core 1, ...
 UNPAIRED = list(range(N_CPUS))  # no hardware threads: every CPU is its own core
+SPLIT_PAIRS = [cpu % 8 for cpu in range(N_CPUS)]  # CPU k and CPU k + 8 are one core
+# CPUs 2 and 3 are the second threads of the reserved CPUs 0 and 1; cores 2 and 3 follow.
+RESERVED_PAIRED_FIRST = [0, 1, 0, 1, 2, 2, 3, 3]
 WHOLE_PERCENT = 100
 
 
@@ -46,14 +49,30 @@ def test_further_devices_share_cores_and_no_cpu_is_used_twice():
     assert min(cpus) >= gen_compose.RESERVED_CORES
 
 
+def test_pinning_follows_the_cores_not_the_cpu_numbers():
+    # CPUs 0 and 1 are reserved, so their second threads (8 and 9) are not cores of their own.
+    cpus = gen_compose.device_cpus(SPLIT_PAIRS)
+    assert cpus[:6] == [2, 3, 4, 5, 6, 7]
+    assert sorted(cpus[6:]) == [8, 9, 10, 11, 12, 13, 14, 15]
+
+
+def test_a_thread_of_a_reserved_core_is_not_a_core_of_its_own():
+    # Devices first get the cores nobody else uses (CPUs 4 and 6), although CPUs 2 and 3 come
+    # first by number: those share a core with the OS and the edge.
+    assert gen_compose.device_cpus(RESERVED_PAIRED_FIRST) == [4, 6, 2, 3, 5, 7]
+
+
 def test_without_hardware_threads_devices_take_consecutive_cpus():
     assert gen_compose.device_cpus(UNPAIRED)[:3] == [2, 3, 4]
 
 
-def test_edge_has_gpu_and_is_not_pinned():
-    edge = gen_compose.build_compose(1, PAIRED)["services"]["edge"]
+def test_edge_has_gpu_and_keeps_to_the_reserved_cpus():
+    services = gen_compose.build_compose(N_CPUS - gen_compose.RESERVED_CORES, PAIRED)["services"]
+    edge = services.pop("edge")
     assert edge["gpus"] == "all"
-    assert "cpuset" not in edge
+    assert edge["cpuset"] == "0-1"
+    # No device is ever placed on a CPU the edge may use.
+    assert all(int(device["cpuset"]) >= gen_compose.RESERVED_CORES for device in services.values())
 
 
 @pytest.mark.parametrize("n_devices", [0, N_CPUS - 1])

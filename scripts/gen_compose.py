@@ -19,7 +19,8 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPO_ROOT / "docker-compose.yml"
 
-# CPUs 0..RESERVED_CORES-1 stay unpinned for the OS and the edge; devices get the others.
+# CPUs 0..RESERVED_CORES-1 are for the OS and the edge, which is pinned to them so that it can
+# never run on a device's CPU; devices get the others.
 RESERVED_CORES = 2
 # Each device gets DEVICE_CPU_QUOTA_US of CPU time in every DEVICE_CPU_PERIOD_US: 21% of one CPU
 # in slices of about 1 ms, which makes MobileNetV2 take about 100 ms as on a Raspberry Pi 4.
@@ -74,6 +75,7 @@ def build_compose(n_devices: int, core_of: list[int]) -> dict:
             "image": "edgeinf-edge",
             "container_name": "edge",
             "gpus": "all",
+            "cpuset": f"0-{RESERVED_CORES - 1}",
             "environment": {"EDGE_PORT": EDGE_PORT},
             "networks": [NETWORK],
         }

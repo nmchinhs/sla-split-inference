@@ -20,8 +20,8 @@ htmlcov/
 
 # ---------- Data, checkpoints, results ----------
 # Datasets (Imagenette is downloaded by the code, never committed)
-data/
-datasets/
+/data/
+/datasets/
 imagenette2*/
 *.tgz
 *.tar.gz
