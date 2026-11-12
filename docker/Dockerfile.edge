@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 # Edge server: GPU. The default Linux torch wheel bundles the CUDA runtime; the NVIDIA
 # Container Toolkit injects the host driver and nvidia-smi at run time (gpus: all).
-FROM python:3.11-slim
+# The base image is pinned by digest: the tag python:3.11-slim moves. This one is of 2026-11-05
+# (Python 3.11.18, Debian trixie), the one the images of that day were built on.
+FROM python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \

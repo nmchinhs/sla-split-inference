@@ -8,13 +8,21 @@ version = "0.1.0"
 description = "SLA-aware split inference with early exit for IoT"
 requires-python = ">=3.11,<3.12"
 # Single source of truth for dependencies: environment.yml installs this package with pip,
-# and the Docker images will too (the device image installs CPU-only torch first).
+# and the Docker images do too (the device image installs CPU-only torch first).
+#
+# Everything that runs in the device and edge containers is pinned to the exact version the
+# images of 2026-11-05 contain (read with `pip freeze` in both), so that a rebuild cannot
+# change the speed or the numerics of what was calibrated and measured. Change a pin on
+# purpose only, and check the device calibration again afterwards (experiments/calibration.md).
+# pandas, matplotlib and pyyaml are used on the host only, for the runner and the plots.
 dependencies = [
-    "torch>=2.4",
-    "torchvision>=0.19",
-    "grpcio>=1.66",
-    "grpcio-tools>=1.66",
-    "numpy>=1.26",
+    "torch==2.15.0",
+    "torchvision==0.29.2",
+    "grpcio==1.85.1",
+    "grpcio-tools==1.85.1",
+    "protobuf==7.36.2",
+    "numpy==2.4.6",
+    "pillow==13.0.0",
     "pandas>=2.2",
     "matplotlib>=3.9",
     "pyyaml>=6.0",

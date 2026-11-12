@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 # IoT device: CPU only. Must not contain CUDA, so torch comes from the CPU wheel index.
-FROM python:3.11-slim
+# The base image is pinned by digest: the tag python:3.11-slim moves. This one is of 2026-11-05
+# (Python 3.11.18, Debian trixie), the one the images of that day were built on.
+FROM python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 
 # iproute2 provides tc for scripts/netem.sh; iputils-ping is for RTT checks.
 RUN apt-get update \
@@ -15,11 +17,12 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN --mount=type=cache,target=/root/.cache/pip pip install --upgrade pip
 
-RUN --mount=type=cache,target=/root/.cache/pip pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+RUN --mount=type=cache,target=/root/.cache/pip pip install torch==2.15.0 torchvision==0.29.2 --index-url https://download.pytorch.org/whl/cpu
 
 WORKDIR /app
 # Editable install against an empty package, so the dependency layer is cached across source
-# changes. torch is already satisfied above, so this does not pull the CUDA build.
+# changes. torch is already satisfied above (the same versions as in pyproject.toml; keep the
+# two in step), so this does not pull the CUDA build.
 COPY pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p src/edgeinf && touch src/edgeinf/__init__.py \
