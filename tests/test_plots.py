@@ -222,3 +222,21 @@ def test_the_baseline_figure_is_written(results, tmp_path):
     path = tmp_path / "figures" / "baselines_latency.png"
     plots.plot_baselines(summary, path)
     assert path.read_bytes()[:4] == PNG_MAGIC
+
+
+def test_panels_show_every_bandwidth_when_the_models_have_different_ones(
+    results, tmp_path, monkeypatch
+):
+    # The panels share the x axis, so the limits and ticks of one panel are those of all: a
+    # model with fewer bandwidths (an unfinished run) must not cut off the other model's points.
+    summary = plots.summarise(plots.load_runs(results))
+    unfinished = summary[summary["rate_mbit"] == 5.0].assign(model="resnet18")
+    figures = []
+    monkeypatch.setattr(plots.plt, "close", figures.append)
+    plots.plot_baselines(plots.pd.concat([summary, unfinished]), tmp_path / "figure.png")
+    (figure,) = figures
+    assert len(figure.axes) == 4
+    for axes in figure.axes:
+        low, high = axes.get_xlim()
+        assert low < 5.0 and high > 50.0
+        assert list(axes.get_xticks()) == [5.0, 50.0]

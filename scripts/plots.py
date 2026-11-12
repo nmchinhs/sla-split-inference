@@ -166,8 +166,13 @@ def _plain(value: float, _position: int) -> str:
     return f"{value:,.0f}" if value >= 1 else f"{value:g}"
 
 
-def _draw_panel(axes: plt.Axes, cells: pd.DataFrame, statistic: str) -> None:
-    """One panel: a line per variant over bandwidth, whiskers for the spread of the repeats."""
+def _draw_panel(axes: plt.Axes, cells: pd.DataFrame, statistic: str, rates: list[float]) -> None:
+    """One panel: a line per variant over bandwidth, whiskers for the spread of the repeats.
+
+    `rates` are the bandwidths (Mbit/s) of the whole figure, in rising order. They set the ticks
+    and the limits of the x axis: the panels share that axis, so every panel must ask for the
+    same ones, also when its own model was run at fewer bandwidths.
+    """
     ends = {}
     for variant, colour in VARIANT_COLOURS.items():
         line = cells[cells["variant"] == variant].sort_values("rate_mbit")
@@ -234,7 +239,6 @@ def _draw_panel(axes: plt.Axes, cells: pd.DataFrame, statistic: str) -> None:
                 color=INK_SECONDARY,
             )
 
-    rates = sorted(cells["rate_mbit"].unique())
     axes.set_xscale("log")
     axes.set_yscale("log")
     axes.set_xticks(rates)
@@ -261,6 +265,7 @@ def plot_baselines(summary: pd.DataFrame, path: Path) -> None:
     and highest repeat. Hollow markers are cells flagged as overloaded.
     """
     models = [model for model in MODEL_TITLES if model in set(summary["model"])]
+    rates = sorted(summary["rate_mbit"].unique())
     width, height = PANEL_SIZE
     figure, grid = plt.subplots(
         len(STATISTICS),
@@ -279,7 +284,7 @@ def plot_baselines(summary: pd.DataFrame, path: Path) -> None:
             title += f", {rate_hz:g} requests per second"
         for row, (statistic, label) in enumerate(STATISTICS):
             axes = grid[row][column]
-            _draw_panel(axes, cells, statistic)
+            _draw_panel(axes, cells, statistic, rates)
             if row == 0:
                 axes.set_title(title, fontsize=10, color=INK, loc="left")
             if row == len(STATISTICS) - 1:
