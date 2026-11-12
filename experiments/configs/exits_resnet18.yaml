@@ -1,0 +1,20 @@
+# Exit heads on the frozen backbone (PLAN.md Phase 3). Run on the host:
+#
+#   conda run --no-capture-output -n edgeinf python scripts/train_exits.py experiments/configs/exits_resnet18.yaml
+#
+# Writes checkpoints/exits_resnet18.pt and results/training/exits_resnet18.csv.
+seed: 0                  # must match the backbone's, so that train and val are the same images
+backbone: checkpoints/train_resnet18.pt   # trained by scripts/train_backbone.py; not changed
+exits: [2, 4, 6]        # an exit head after each of these blocks (0-based block indices)
+head_pool: 7             # a head first averages its feature map down to 7x7
+head_hidden: 128         # channels of the head's 3x3 convolution
+data_root: data
+val_fraction: 0.1        # as for the backbone, for the same reason
+epochs: 15
+batch_size: 64
+lr: 0.05                 # peak learning rate of SGD with Nesterov momentum, cosine decay to zero
+momentum: 0.9
+weight_decay: 0.00005
+workers: 8               # data-loading processes
+device: cuda
+amp: true                # mixed precision: faster and less GPU memory

@@ -5,13 +5,15 @@ import torch
 
 from edgeinf.common.serialize import serialize
 from edgeinf.data.imagenette import MEAN, STD, normalise
-from edgeinf.models.multi_exit import INPUT_SIZE, MODEL_NAMES, build_model
-from edgeinf.models.split import run_blocks
+from edgeinf.models.multi_exit import INPUT_SIZE, MODEL_NAMES, add_exits, build_model
+from edgeinf.models.split import exit_check, run_blocks
 from edgeinf.profiler.layer_profile import (
     device_step,
+    device_step_exits,
     edge_step,
     profile_device,
     profile_edge,
+    profile_exits,
     raw_image,
 )
 
@@ -21,6 +23,9 @@ WARMUP = 1
 GAP_MS = 0.0
 RAW_IMAGE_BYTES = 150_550  # 3 x 224 x 224 bytes and a 22-byte header
 CONFIDENCE_TOLERANCE = 0.01  # relative; 16-bit transfer moves the output a little
+EXITS = {"mobilenetv2": [4, 10], "resnet18": [2, 4]}
+HEAD_POOL = 7
+HEAD_HIDDEN = 16
 
 
 @pytest.fixture(scope="module", params=MODEL_NAMES)
@@ -80,3 +85,37 @@ def test_edge_profile_has_a_time_for_every_split_point_it_can_receive(model):
 def test_running_the_whole_model_costs_more_than_its_first_block(model):
     profile = profile_device(model, REQUESTS, WARMUP, GAP_MS, SEED)
     assert profile["device_ms"][model.num_blocks] > profile["device_ms"][1]
+
+
+@pytest.fixture(scope="module", params=MODEL_NAMES)
+def exit_model(request):
+    torch.manual_seed(SEED)
+    model = build_model(request.param)
+    add_exits(model, EXITS[request.param], HEAD_POOL, HEAD_HIDDEN)
+    return model.eval()
+
+
+def test_device_step_with_exits_answers_at_the_exit_or_sends_what_device_step_sends(exit_model):
+    frame = raw_image(SEED)
+    n = exit_model.num_blocks
+    with torch.inference_mode():
+        for block in EXITS[exit_model.name]:
+            features = run_blocks(exit_model, normalise(frame), 0, block + 1)
+            label, _ = exit_check(exit_model, features, block)
+            assert device_step_exits(exit_model, frame, n, block) == label
+        for k in range(n + 1):
+            assert device_step_exits(exit_model, frame, k, None) == device_step(
+                exit_model, frame, k
+            )
+
+
+def test_exit_overhead_profile_has_a_time_per_exit_and_per_split_point(exit_model):
+    profile = profile_exits(exit_model, REQUESTS, WARMUP, GAP_MS, SEED)
+    exits = EXITS[exit_model.name]
+    assert profile["exit_blocks"] == exits
+    assert len(profile["exit_ms"]) == len(profile["exit_p95_ms"]) == len(exits)
+    n = exit_model.num_blocks
+    assert len(profile["device_exits_ms"]) == len(profile["device_exits_p95_ms"]) == n + 1
+    assert all(ms > 0 for ms in profile["exit_ms"] + profile["device_exits_ms"])
+    # A later exit answers later, and all of them before the whole model has run.
+    assert profile["exit_ms"][0] < profile["device_exits_ms"][n]

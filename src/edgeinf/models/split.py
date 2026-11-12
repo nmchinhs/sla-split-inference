@@ -9,15 +9,31 @@ is what runs:
     run_tail   the rest: what crossed the split point -> logits (on the edge, or on the device
                when it falls back)
     top1       logits -> label and confidence
+
+With exit heads the device's part is `run_head_exits`: after every block that has a head it
+checks the head's confidence against tau, and answers at once if it is high enough.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from typing import NamedTuple
 
 import torch
 
 from edgeinf.common.serialize import serialize, serialize_jpeg
 from edgeinf.data.imagenette import normalise
 from edgeinf.models.multi_exit import MultiExitModel
+
+TAU_NEVER = 1.0  # at this threshold (and above) no exit is taken, and no exit head is run
+
+
+class Exit(NamedTuple):
+    """An answer given by an exit head on the device."""
+
+    block: int  # the head reads the output of this block
+    label: int  # predicted class index
+    confidence: float  # largest softmax of the head, 0..1
 
 
 def run_blocks(model: MultiExitModel, x: torch.Tensor, start: int, end: int) -> torch.Tensor:
@@ -80,3 +96,54 @@ def top1(logits: torch.Tensor) -> tuple[int, float]:
     """
     confidence, label = logits.softmax(1).max(1)
     return int(label), float(confidence)
+
+
+def exit_check(model: MultiExitModel, x: torch.Tensor, block: int) -> tuple[int, float]:
+    """Label and confidence of the exit head after `block` for `x`, the output of that block."""
+    return top1(model.exits[str(block)](x))
+
+
+def _walk(
+    model: MultiExitModel, frame: torch.Tensor, k: int, take: Callable[[int, float], bool]
+) -> tuple[torch.Tensor, Exit | None]:
+    """`run_head` with every exit before k evaluated; stops at the first one `take` accepts.
+
+    `take(block, confidence)` decides. Returns the output of the last block that ran and the
+    exit that was taken, or None if the frame got through to split point k.
+    """
+    if not 0 <= k <= model.num_blocks:
+        raise ValueError(f"split point {k} is outside [0, {model.num_blocks}] for {model.name}")
+    if k == 0:
+        return frame, None
+    x = normalise(frame)
+    for block in range(k):
+        x = model.blocks[block](x)
+        if str(block) in model.exits:
+            label, confidence = exit_check(model, x, block)
+            if take(block, confidence):
+                return x, Exit(block, label, confidence)
+    return x, None
+
+
+def run_head_exits(
+    model: MultiExitModel, frame: torch.Tensor, k: int, tau: float
+) -> tuple[torch.Tensor, Exit | None]:
+    """The device's part for one 8-bit frame with early exits: blocks [0, k) and the exits in it.
+
+    The exits after blocks i < k are checked in order, and the first whose confidence is
+    >= `tau` answers: the result is then (output of that block, the Exit). Otherwise it is
+    (what crosses split point k, None), as from `run_head`. With tau = 1.0 the heads are not run
+    at all, so that "never exit" costs nothing and cannot be defeated by a confidence that rounds
+    to exactly 1.0.
+    """
+    if tau >= TAU_NEVER:
+        return run_head(model, frame, k), None
+    return _walk(model, frame, k, lambda _block, confidence: confidence >= tau)
+
+
+def run_head_forced(
+    model: MultiExitModel, frame: torch.Tensor, k: int, exit_block: int | None
+) -> tuple[torch.Tensor, Exit | None]:
+    """`run_head_exits` with the outcome fixed, for timing: every exit before k is evaluated,
+    and the one after `exit_block` is taken whatever its confidence (None: no exit is taken)."""
+    return _walk(model, frame, k, lambda block, _confidence: block == exit_block)

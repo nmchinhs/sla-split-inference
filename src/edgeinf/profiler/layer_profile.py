@@ -11,6 +11,18 @@ having the answer.
                               block k-1 as 16-bit floats for 0 < k < n, nothing at n
     edge_ms[k]    k = 0..n-1  decode, move to the edge's device, (k = 0: normalise,) run blocks
                               [k, n), read out label and confidence
+
+For a model with exit heads the device side is measured a second time with the heads running
+(`profile_exits`), again as a whole, because the cost of a head cannot be added to a block time
+any more than block times can be added to each other:
+
+    exit_blocks[j]                the block each exit follows
+    exit_ms[j]                    a request that exit j answers: normalise, blocks [0, b_j], every
+                                  head up to and including j, no serialising
+    device_exits_ms[k]  k = 0..n  as device_ms[k], with every head before k run and none taken
+                                  (the path of a request that no exit answers, tau < 1)
+
+`device_ms` stays the cost with tau = 1.0, where no head runs.
 """
 
 from __future__ import annotations
@@ -23,7 +35,7 @@ import torch
 
 from edgeinf.common.serialize import deserialize
 from edgeinf.models.multi_exit import INPUT_SIZE, MultiExitModel
-from edgeinf.models.split import pack, run_head, run_tail, top1
+from edgeinf.models.split import pack, run_head, run_head_forced, run_tail, top1
 
 P95 = 0.95
 MS_PER_S = 1e3
@@ -65,6 +77,19 @@ def device_step(model: MultiExitModel, frame: torch.Tensor, k: int) -> bytes | i
     return pack(out, k)
 
 
+def device_step_exits(
+    model: MultiExitModel, frame: torch.Tensor, k: int, exit_block: int | None
+) -> bytes | int:
+    """`device_step` with every exit head before k run. The exit after `exit_block` answers
+    (returns its label); with None no exit answers and the result is that of `device_step`."""
+    out, taken = run_head_forced(model, frame, k, exit_block)
+    if taken is not None:
+        return taken.label
+    if k == model.num_blocks:
+        return int(out.argmax(1))
+    return pack(out, k)
+
+
 def edge_step(model: MultiExitModel, data: bytes, k: int, device: str) -> tuple[int, float]:
     """What the edge does with the bytes of split point k: returns (label, confidence)."""
     return top1(run_tail(model, deserialize(data).to(device), k))
@@ -90,6 +115,42 @@ def profile_device(
         medians.append(median)
         p95s.append(p95)
     return {"device_ms": medians, "device_p95_ms": p95s, "bytes": sizes}
+
+
+@torch.inference_mode()
+def profile_exits(
+    model: MultiExitModel, requests: int, warmup: int, gap_ms: float, seed: int
+) -> dict[str, list[float]]:
+    """Median and p95 device time in ms with the exit heads running. See the module docstring."""
+    frame = raw_image(seed)
+    exits = model.exit_points
+    profile: dict[str, list[float]] = {
+        "exit_blocks": exits,
+        "exit_ms": [],
+        "exit_p95_ms": [],
+        "device_exits_ms": [],
+        "device_exits_p95_ms": [],
+    }
+    for block in exits:
+        median, p95 = median_and_p95(
+            time_calls(
+                lambda block=block: device_step_exits(model, frame, block + 1, block),
+                requests,
+                warmup,
+                gap_ms,
+            )
+        )
+        profile["exit_ms"].append(median)
+        profile["exit_p95_ms"].append(p95)
+    for k in range(model.num_blocks + 1):
+        median, p95 = median_and_p95(
+            time_calls(
+                lambda k=k: device_step_exits(model, frame, k, None), requests, warmup, gap_ms
+            )
+        )
+        profile["device_exits_ms"].append(median)
+        profile["device_exits_p95_ms"].append(p95)
+    return profile
 
 
 @torch.inference_mode()

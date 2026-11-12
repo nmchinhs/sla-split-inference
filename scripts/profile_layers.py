@@ -8,7 +8,8 @@ in experiments/profiles/README.md):
 
 The device tier is timed on one CPU thread with idle time before every run; the edge tier is timed
 on the GPU with TF32 off. Without --checkpoint the weights are random, which does not change the
-times.
+times. If the checkpoint has exit heads (scripts/train_exits.py), the device profile also has the
+times with the heads running.
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from pathlib import Path
 
 import torch
 
-from edgeinf.models.multi_exit import MODEL_NAMES, build_model
-from edgeinf.profiler.layer_profile import profile_device, profile_edge
+from edgeinf.models.multi_exit import MODEL_NAMES, build_model, load_checkpoint
+from edgeinf.profiler.layer_profile import profile_device, profile_edge, profile_exits
 
 REQUESTS = 100  # timed runs per split point (PLAN.md: median of 100 runs after warm-up)
 WARMUP = 10
@@ -42,10 +43,9 @@ def main() -> None:
     args = parser.parse_args()
 
     torch.manual_seed(SEED)
-    model = build_model(args.model)
-    if args.checkpoint:
-        model.load_state_dict(torch.load(args.checkpoint, weights_only=True)["state_dict"])
-    model.eval()
+    model = load_checkpoint(args.checkpoint) if args.checkpoint else build_model(args.model).eval()
+    if model.name != args.model:
+        parser.error(f"{args.checkpoint} holds {model.name}, not {args.model}")
 
     profile = {
         "model": args.model,
@@ -62,6 +62,8 @@ def main() -> None:
         torch.set_num_threads(1)  # a device has one core
         profile["gap_ms"] = args.gap_ms
         profile |= profile_device(model, args.requests, args.warmup, args.gap_ms, SEED)
+        if model.exit_points:
+            profile |= profile_exits(model, args.requests, args.warmup, args.gap_ms, SEED)
     else:
         torch.backends.cudnn.allow_tf32 = False  # the edge must compute what the device computes
         device = "cuda" if torch.cuda.is_available() else "cpu"

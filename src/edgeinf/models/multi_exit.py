@@ -7,13 +7,13 @@ The architectures are torchvision's MobileNetV2 and ResNet-18, regrouped into bl
 from random weights, never ImageNet-pretrained ones: Imagenette's val split (our test set) is
 drawn from ImageNet's train images.
 
-Exit heads are attached in Phase 3 with `MultiExitModel.add_exit`. Until then `exits` is empty
-and the model is a plain backbone.
+Exit heads are attached with `add_exits` (one `exit_head` per position) and trained by
+scripts/train_exits.py with the backbone frozen. A model without them is a plain backbone.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import torch
@@ -22,6 +22,8 @@ from torch import nn
 
 NUM_CLASSES = 10  # Imagenette
 INPUT_SIZE = 224  # px, height and width of the model input
+EXIT_KERNEL = 3  # px, kernel of the convolution in an exit head
+PROBE_SIZE = 64  # px, side of the blank image that is run once to read the blocks' channel counts
 
 
 class MultiExitModel(nn.Module):
@@ -106,11 +108,66 @@ def build_model(name: str, num_classes: int = NUM_CLASSES) -> MultiExitModel:
     return MultiExitModel(name, _BUILDERS[name](num_classes))
 
 
+def exit_head(
+    in_channels: int, pool: int, hidden: int, num_classes: int = NUM_CLASSES
+) -> nn.Sequential:
+    """An exit head: logits (batch, num_classes) from a block output with `in_channels` channels.
+
+    The feature map is averaged down to `pool` x `pool`, whatever its size, so that every head
+    costs about the same; then one 3x3 convolution to `hidden` channels, batch norm, ReLU, a
+    global average and a linear classifier.
+    """
+    return nn.Sequential(
+        nn.AdaptiveAvgPool2d(pool),
+        nn.Conv2d(in_channels, hidden, EXIT_KERNEL, padding=EXIT_KERNEL // 2, bias=False),
+        nn.BatchNorm2d(hidden),
+        nn.ReLU(inplace=True),
+        nn.AdaptiveAvgPool2d(1),
+        nn.Flatten(1),
+        nn.Linear(hidden, num_classes),
+    )
+
+
+def block_channels(model: MultiExitModel) -> list[int]:
+    """Channels of the output of every block but the last (which returns logits)."""
+    was_training = model.training
+    model.eval()  # so the probe does not touch the BatchNorm statistics
+    parameter = next(model.parameters())
+    x = torch.zeros(1, 3, PROBE_SIZE, PROBE_SIZE, device=parameter.device, dtype=parameter.dtype)
+    channels = []
+    with torch.no_grad():
+        for block in model.blocks[:-1]:
+            x = block(x)
+            channels.append(x.shape[1])
+    model.train(was_training)
+    return channels
+
+
+def add_exits(model: MultiExitModel, blocks: Sequence[int], pool: int, hidden: int) -> None:
+    """Attach an `exit_head` with fresh weights after each of `blocks` (indices of blocks)."""
+    channels = block_channels(model)
+    for block in blocks:
+        if not 0 <= block < len(channels):
+            raise ValueError(
+                f"exit after block {block} is outside [0, {len(channels)}) for {model.name}"
+            )
+        model.add_exit(block, exit_head(channels[block], pool, hidden))
+
+
 def load_checkpoint(path: str | Path) -> MultiExitModel:
-    """The model saved by scripts/train_backbone.py at `path`, on the CPU and in eval mode."""
+    """The model saved at `path`, on the CPU and in eval mode.
+
+    The file is a backbone written by scripts/train_backbone.py, or a backbone with exit heads
+    written by scripts/train_exits.py; the latter has an entry `exits` that says where the heads
+    sit and how they are built (`blocks`, `pool`, `hidden`).
+    """
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(checkpoint, dict) or not {"model", "state_dict"} <= set(checkpoint):
-        raise ValueError(f"{path} is not a checkpoint written by scripts/train_backbone.py")
+        raise ValueError(
+            f"{path} is not a checkpoint written by scripts/train_backbone.py or train_exits.py"
+        )
     model = build_model(checkpoint["model"])
+    if exits := checkpoint.get("exits"):
+        add_exits(model, exits["blocks"], exits["pool"], exits["hidden"])
     model.load_state_dict(checkpoint["state_dict"])
     return model.eval()
