@@ -7,7 +7,7 @@
 # How a run is built from these numbers: the docstring of scripts/run_experiment.py.
 seed: 0
 model: mobilenetv2
-checkpoint: checkpoints/train_mobilenetv2.pt   # must be one the edge serves (scripts/gen_compose.py)
+checkpoint: checkpoints/exits_mobilenetv2.pt   # must be one the edge serves (scripts/gen_compose.py)
 frames: data/frames        # written by scripts/export_frames.py
 split: test                # results are reported on the test split only
 devices: [device-1]

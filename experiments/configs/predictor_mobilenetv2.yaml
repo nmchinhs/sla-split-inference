@@ -1,0 +1,39 @@
+# Predictor validation (PLAN.md Phase 4 W9 step 4): fixed plans (k, tau) at four static bandwidths,
+# three repeats. Run on the host with the testbed up and the machine idle:
+#
+#   conda run --no-capture-output -n edgeinf python scripts/run_experiment.py experiments/configs/predictor_mobilenetv2.yaml
+#
+# Writes results/predictor_mobilenetv2/<trace>_r<repeat>.csv and .json, about 2 hours. Then
+#
+#   conda run -n edgeinf python scripts/plots.py predictor results/predictor_mobilenetv2 results/predictor_resnet18
+#
+# compares the measured latency of every cell with what scheduler/predictor.py says.
+# How a run is built from these numbers: the docstring of scripts/run_experiment.py.
+seed: 0
+model: mobilenetv2
+checkpoint: checkpoints/exits_mobilenetv2.pt   # must be one the edge serves (scripts/gen_compose.py)
+frames: data/frames        # written by scripts/export_frames.py
+split: test                # the profiles are from val; the check is on images they have not seen
+devices: [device-1]
+# offload_jpeg, and pinned plans: k just behind the first exit (5), behind the third (15), and all local (20),
+# each without exits (tau 1.0) and with two thresholds.
+variants:
+  - offload_jpeg
+  - {variant: pinned, k: 5, tau: 0.5}
+  - {variant: pinned, k: 5, tau: 0.9}
+  - {variant: pinned, k: 5, tau: 1.0}
+  - {variant: pinned, k: 15, tau: 0.5}
+  - {variant: pinned, k: 15, tau: 0.9}
+  - {variant: pinned, k: 15, tau: 1.0}
+  - {variant: pinned, k: 20, tau: 0.5}
+  - {variant: pinned, k: 20, tau: 0.9}
+  - {variant: pinned, k: 20, tau: 1.0}
+jpeg_quality: 50           # lowest quality that costs < 0.5 points on val (experiments/jpeg/)
+rate_hz: 2                 # 500 ms between arrivals, so that most plans keep up also at 0.5 Mbit/s
+traces: [static_0p5mbps, static_1mbps, static_5mbps, static_20mbps]
+repeats: 3
+rounds: 4                  # per run, every plan serves this many blocks, in rotating order
+block_requests: 25         # logged requests of a block: rounds x block_requests = 100 per plan and run
+block_warmup: 5            # requests at the start of every block that are served but not logged
+warmup_requests: 50        # served before the first block of a run, spread over the plans, not logged
+rpc_timeout_s: 10.0        # the largest tensor here needs 1.6 s at 0.5 Mbit/s; a fallback would spoil the cell

@@ -155,11 +155,14 @@ def profile_exits(
 
 @torch.inference_mode()
 def profile_edge(
-    model: MultiExitModel, requests: int, warmup: int, device: str, seed: int
+    model: MultiExitModel, requests: int, warmup: int, device: str, seed: int, gap_ms: float = 0.0
 ) -> dict[str, list[float]]:
     """Median and p95 edge time in ms for k = 0..n-1, with the model on `device`.
 
     The bytes for each k are produced on the CPU first, as a device would, and not timed.
+    `gap_ms` of idle time precedes every timed run. In the system the edge waits for the next
+    request, and a GPU that has been idle is slower on the first work it gets than one that is
+    kept busy, so a profile taken back to back (gap 0) is too fast.
     """
     frame = raw_image(seed)
     cpu_model = model.to("cpu")
@@ -169,7 +172,7 @@ def profile_edge(
     for k, data in enumerate(payloads):
         median, p95 = median_and_p95(
             time_calls(
-                lambda k=k, data=data: edge_step(model, data, k, device), requests, warmup, 0.0
+                lambda k=k, data=data: edge_step(model, data, k, device), requests, warmup, gap_ms
             )
         )
         medians.append(median)

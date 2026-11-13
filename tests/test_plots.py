@@ -240,3 +240,127 @@ def test_panels_show_every_bandwidth_when_the_models_have_different_ones(
         low, high = axes.get_xlim()
         assert low < 5.0 and high > 50.0
         assert list(axes.get_xticks()) == [5.0, 50.0]
+
+
+# ------------------------------------------------------------------------------ the predictor
+
+# A model of four blocks with one exit after block 0, which answers 60% of the inputs at 0.5.
+TOY = plots.Profiles(
+    model="mobilenetv2",
+    n_blocks=4,
+    device={
+        "device_ms": [1, 10, 20, 30, 40],
+        "device_p95_ms": [2, 13, 25, 36, 48],
+        "bytes": [1000, 5000, 2500, 1250, 0],
+        "exit_blocks": [0],
+        "exit_ms": [12],
+        "exit_p95_ms": [15],
+        "device_exits_ms": [1, 12, 22, 34, 44],
+        "device_exits_p95_ms": [2, 15, 27, 40, 52],
+    },
+    edge={"edge_ms": [4, 3, 2, 1], "edge_p95_ms": [5, 4, 3, 2]},
+    exits={
+        "final_accuracy": 0.9,
+        "by_tau": [{"tau": 0.5, "exit_rate": [0.6], "p_continue": [0.4], "accuracy": [0.85]}],
+    },
+    jpeg={},
+)
+
+
+def _pinned(k: int, tau: float, latency_ms: float, **changes) -> dict:
+    return _row("pinned", latency_ms, k=k, tau=tau, **changes)
+
+
+@pytest.fixture
+def pinned_runs(tmp_path) -> Path:
+    """Two repeats at 1 Mbps, 20 ms: all local without exits, and with the exit at tau 0.5."""
+    folder = tmp_path / "predictor_mobilenetv2"
+    exits = [{"exited_on_device": True}, {"exited_on_device": True}, {}, {"correct": False}]
+    for repeat, shift in enumerate((0.0, 4.0)):
+        rows = [_pinned(4, 1.0, value + shift, bw_est_mbps=2.0) for value in (38.0, 40.0, 48.0)]
+        # A request that waited 100 ms for the device: its service time is what counts.
+        rows.append(_pinned(4, 1.0, 142.0 + shift, wait_ms=100.0, bw_est_mbps=2.0))
+        rows += [
+            _pinned(4, 0.5, value, bw_est_mbps=2.0, **change)
+            for value, change in zip((12.0, 13.0, 44.0, 51.0), exits, strict=True)
+        ]
+        _write_run(folder, "static_1mbps", 1.0, repeat, rows)
+    return folder
+
+
+def _plan(table, k: int, tau: float) -> dict:
+    rows = table[(table["k"] == k) & (table["tau"] == tau)]
+    assert len(rows) == 1
+    return rows.iloc[0].to_dict()
+
+
+def test_a_cell_is_compared_by_its_service_time_per_repeat(pinned_runs):
+    table = plots.validate(plots.load_runs(pinned_runs), {"mobilenetv2": TOY})
+    assert len(table) == 2
+    plain = _plan(table, 4, 1.0)
+    # Repeat 0: service times 38, 40, 48, 42 (mean 42, p95 48); repeat 1 is 4 ms slower.
+    assert plain["mean_ms"] == pytest.approx(44.0)
+    assert plain["p95_ms"] == pytest.approx(50.0)
+    assert (plain["predicted_mean_ms"], plain["predicted_p95_ms"]) == (40, 48)
+    assert plain["mean_error_pct"] == pytest.approx(100 * (40 - 44) / 44)
+    assert plain["p95_error_pct"] == pytest.approx(100 * (48 - 50) / 50)
+    assert (plain["repeats"], plain["requests"]) == (2, 8)
+    assert plain["compared"]
+
+
+def test_exit_share_and_accuracy_are_set_against_the_profile(pinned_runs):
+    table = plots.validate(plots.load_runs(pinned_runs), {"mobilenetv2": TOY})
+    exits = _plan(table, 4, 0.5)
+    assert (exits["exit_share"], exits["predicted_exit_share"]) == (50.0, pytest.approx(60.0))
+    assert (exits["accuracy"], exits["predicted_accuracy"]) == (75.0, pytest.approx(85.0))
+    assert exits["predicted_mean_ms"] == pytest.approx(0.6 * 12 + 0.4 * 44)
+    # 40% take the slow path, so the p95 is its quantile 0.875, between its median and its p95.
+    assert exits["predicted_p95_ms"] == pytest.approx(44 + (0.875 - 0.5) / 0.45 * (52 - 44))
+
+
+def test_overloaded_cells_and_cells_with_fallbacks_are_left_out_of_the_error(tmp_path):
+    folder = tmp_path / "predictor_mobilenetv2"
+    rows = [_pinned(4, 1.0, 40.0)] * 3
+    rows += [_pinned(2, 1.0, 300.0 + 100.0 * i, wait_ms=100.0 * i) for i in range(3)]  # 5 a second
+    rows += [_pinned(3, 1.0, 60.0), _pinned(3, 1.0, 90.0, edge_up=False)]
+    _write_run(folder, "static_1mbps", 1.0, 0, rows)
+    table = plots.validate(plots.load_runs(folder), {"mobilenetv2": TOY})
+    assert [_plan(table, k, 1.0)["compared"] for k in (4, 2, 3)] == [True, False, False]
+    assert _plan(table, 2, 1.0)["overloaded"] and _plan(table, 3, 1.0)["fallbacks"] == 1
+
+    (summary,) = plots.error_summary(table).to_dict("records")
+    assert (summary["model"], summary["cells"], summary["left_out"]) == ("mobilenetv2", 1, 2)
+    assert summary["mean_predicted_median_error_pct"] == pytest.approx(0.0)
+    assert summary["p95_predicted_median_error_pct"] == pytest.approx(20.0)  # 48 against 40
+    assert summary["mean_predicted_within_target"] == 1
+    assert summary["p95_predicted_within_target"] == 0
+
+
+def test_predictions_are_also_made_from_what_the_device_estimated(tmp_path):
+    folder = tmp_path / "predictor_mobilenetv2"
+    _write_run(folder, "static_1mbps", 1.0, 0, [_pinned(2, 1.0, 62.0, bw_est_mbps=2.0)] * 2)
+    record_path = folder / "static_1mbps_r0.json"
+    record = json.loads(record_path.read_text())
+    record["blocks"] = [{"n_blocks": N_BLOCKS, "link": {"rtt_ms": rtt}} for rtt in (21.0, 23.0)]
+    record_path.write_text(json.dumps(record))
+    (cell,) = plots.validate(plots.load_runs(folder), {"mobilenetv2": TOY}).to_dict("records")
+    assert cell["predicted_mean_ms"] == pytest.approx(20 + 20 + 20 + 2)  # 1 Mbit/s, 20 ms
+    assert (cell["bw_est_mbps"], cell["rtt_est_ms"]) == (2.0, 22.0)
+    assert cell["est_mean_ms"] == pytest.approx(20 + 10 + 22 + 2)  # 2 Mbit/s, 22 ms
+
+
+def test_without_estimates_only_the_prediction_from_the_trace_is_made(pinned_runs):
+    table = plots.validate(plots.load_runs(pinned_runs), {"mobilenetv2": TOY})
+    assert table["est_mean_ms"].isna().all()  # these made-up records have no RTT estimate
+
+
+def test_the_validation_figure_is_written(pinned_runs, tmp_path):
+    table = plots.validate(plots.load_runs(pinned_runs), {"mobilenetv2": TOY})
+    path = tmp_path / "figures" / "validation.png"
+    plots.plot_validation(table, path)
+    assert path.read_bytes().startswith(PNG_MAGIC)
+
+
+def test_the_summary_still_works_on_runs_of_pinned_plans(pinned_runs):
+    summary = plots.summarise(plots.load_runs(pinned_runs))
+    assert set(summary["variant"]) == {"pinned"}

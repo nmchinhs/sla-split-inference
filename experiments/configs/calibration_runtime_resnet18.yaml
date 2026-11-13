@@ -7,7 +7,7 @@
 # Writes results/calibration_runtime_resnet18/. About a minute.
 seed: 0
 model: resnet18
-checkpoint: checkpoints/train_resnet18.pt
+checkpoint: checkpoints/exits_resnet18.pt
 frames: data/frames
 split: val                 # any frames do: only the time is looked at
 devices: [device-1]

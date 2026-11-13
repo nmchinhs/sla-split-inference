@@ -23,6 +23,13 @@ the same frames.
 
 The requests themselves are served by an agent process in the device container
 (src/edgeinf/device/client.py), which gets one job per block and returns its rows.
+
+An entry of `variants` is the name of a variant, or a plan written out,
+
+    - {variant: pinned, k: 5, tau: 0.9}
+
+which serves every request with that split point and threshold. Pinned plans are for checking the
+predictor; in the CSV their variant is `pinned`, and k and tau tell them apart.
 """
 
 from __future__ import annotations
@@ -46,7 +53,7 @@ import yaml
 
 from edgeinf.common.logging import RequestLog
 from edgeinf.data.imagenette import FRAME_SPLITS, LABELS_FILE
-from edgeinf.device.client import VARIANTS
+from edgeinf.device.client import PINNED, VARIANTS
 from edgeinf.models.multi_exit import MODEL_NAMES
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -108,11 +115,7 @@ def check_config(config: dict) -> None:
         raise ValueError(f"missing config keys: {sorted(missing)}")
     if config["model"] not in MODEL_NAMES:
         raise ValueError(f"unknown model {config['model']!r}; expected one of {MODEL_NAMES}")
-    variants = config["variants"]
-    if not variants or len(set(variants)) != len(variants):
-        raise ValueError(f"variants must be a list of different variants, got {variants}")
-    if not_yet := [variant for variant in variants if variant not in VARIANTS]:
-        raise ValueError(f"variants {not_yet} cannot be run yet; expected some of {VARIANTS}")
+    variants = [plan["variant"] for plan in plans(config)]
     if "offload_jpeg" in variants and config["jpeg_quality"] is None:
         raise ValueError("offload_jpeg is among the variants, so jpeg_quality must be set")
     if len(config["devices"]) != 1:
@@ -129,6 +132,41 @@ def check_config(config: dict) -> None:
             raise ValueError(f"{key} must not be negative, got {config[key]}")
     if not config["traces"]:
         raise ValueError("traces must name at least one trace")
+
+
+def plans(config: dict) -> list[dict]:
+    """The entries of `variants` as {"label", "variant"} and, for a pinned plan, "k" and "tau".
+
+    The label names the entry in the run's record and in the messages: the variant's name, or
+    "pinned k=5 tau=0.9". Raises ValueError for an entry that cannot be run, and unless all
+    labels differ.
+    """
+    entries = []
+    for entry in config["variants"] or ():
+        if isinstance(entry, str):
+            if entry not in VARIANTS:
+                raise ValueError(
+                    f"variant {entry!r} cannot be run yet; expected one of {VARIANTS} "
+                    f"or a {PINNED} plan"
+                )
+            entries.append({"label": entry, "variant": entry})
+            continue
+        if not isinstance(entry, dict) or set(entry) != {"variant", "k", "tau"}:
+            raise ValueError(f"a plan must have the keys variant, k and tau, got {entry!r}")
+        k, tau = entry["k"], entry["tau"]
+        if entry["variant"] != PINNED:
+            raise ValueError(f"only a {PINNED} plan is written out, got {entry['variant']!r}")
+        if isinstance(k, bool) or not isinstance(k, int) or k < 0:
+            raise ValueError(f"k of a pinned plan must be a split point, got {k!r}")
+        if isinstance(tau, bool) or not isinstance(tau, int | float) or not 0 < tau <= 1:
+            raise ValueError(f"tau of a pinned plan must be in (0, 1], got {tau!r}")
+        entries.append(
+            {"label": f"{PINNED} k={k} tau={tau}", "variant": PINNED, "k": k, "tau": tau}
+        )
+    labels = [entry["label"] for entry in entries]
+    if not labels or len(set(labels)) != len(labels):
+        raise ValueError(f"variants must be a list of different variants, got {labels}")
+    return entries
 
 
 def load_config(path: Path) -> dict:
@@ -193,11 +231,11 @@ def plan_run(config: dict, repeat: int, trace: str, n_frames: int) -> list[dict]
     """The blocks of one run in the order they are served.
 
     A block is {"round", "variant", "indices", "warmup"}: the frames to serve and how many of
-    the first requests are not logged. The warm-up blocks come first, with "round" None and
-    nothing logged. The frames depend on the seed, the repeat and the trace; all variants of a
-    round get the same ones.
+    the first requests are not logged; "variant" is the label of an entry of `plans`. The
+    warm-up blocks come first, with "round" None and nothing logged. The frames depend on the
+    seed, the repeat and the trace; all variants of a round get the same ones.
     """
-    variants = config["variants"]
+    variants = [plan["label"] for plan in plans(config)]
     per_block = config["block_warmup"] + config["block_requests"]
     warmup_each = math.ceil(config["warmup_requests"] / len(variants))
     key = f"{config['seed']}/{repeat}/{trace}"
@@ -230,17 +268,17 @@ def plan_run(config: dict, repeat: int, trace: str, n_frames: int) -> list[dict]
 
 def job(config: dict, block: dict) -> dict:
     """The job that makes the device agent serve `block` (see Agent in device/client.py)."""
+    plan = next(plan for plan in plans(config) if plan["label"] == block["variant"])
     return {
         "checkpoint": config["checkpoint"],
         "frames_dir": config["frames"],
         "split": config["split"],
         "indices": block["indices"],
-        "variant": block["variant"],
         "jpeg_quality": config["jpeg_quality"],
         "rate_hz": config["rate_hz"],
         "warmup": block["warmup"],
         "timeout_s": config["rpc_timeout_s"],
-    }
+    } | {key: value for key, value in plan.items() if key != "label"}
 
 
 # ------------------------------------------------------------------------------ the testbed
@@ -358,6 +396,7 @@ def run_once(
                     "seconds": round(time.time() - started, 3),
                     "minor_faults": reply["minor_faults"],
                     "n_blocks": reply["n_blocks"],
+                    "link": reply["link"],  # the device's estimate when the block ended
                 }
             )
             medians.setdefault(block["variant"], []).extend(
@@ -388,7 +427,8 @@ def run(config_path: Path, force: bool = False) -> None:
     testbed = preflight(config)
     device = config["devices"][0]
 
-    print(f"{config_path.stem}: {config['model']}, {config['variants']}, writing to {out_dir}")
+    names = [plan["label"] for plan in plans(config)]
+    print(f"{config_path.stem}: {config['model']}, {names}, writing to {out_dir}")
     agent = AgentProcess(device)
     try:
         for repeat in range(config["repeats"]):

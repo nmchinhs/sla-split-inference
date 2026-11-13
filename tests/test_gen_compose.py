@@ -85,7 +85,7 @@ def test_edge_is_given_the_checkpoints_and_told_which_to_serve():
     edge = gen_compose.build_compose(1, PAIRED)["services"]["edge"]
     assert edge["volumes"] == ["./checkpoints:/app/checkpoints:ro"]
     served = edge["environment"]["EDGE_CHECKPOINTS"].split(",")
-    assert served == ["checkpoints/train_mobilenetv2.pt", "checkpoints/train_resnet18.pt"]
+    assert served == ["checkpoints/exits_mobilenetv2.pt", "checkpoints/exits_resnet18.pt"]
     # Every file it is told to serve is inside the folder it is given.
     assert all(path.startswith("checkpoints/") for path in served)
 
@@ -98,3 +98,10 @@ def test_devices_are_given_checkpoints_and_frames_read_only():
         # A device has no dataset and writes nothing to the host.
         assert all(volume.endswith(":ro") for volume in volumes)
         assert not any("imagenette" in volume or "results" in volume for volume in volumes)
+
+
+def test_devices_keep_their_congestion_window_over_a_pause_and_the_edge_is_left_alone():
+    services = gen_compose.build_compose(2, PAIRED)["services"]
+    for name in ("device-1", "device-2"):
+        assert services[name]["sysctls"] == {"net.ipv4.tcp_slow_start_after_idle": 0}
+    assert "sysctls" not in services["edge"]  # it only sends small answers

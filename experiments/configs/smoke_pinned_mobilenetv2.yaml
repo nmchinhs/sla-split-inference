@@ -1,0 +1,22 @@
+# Smoke pass for exits and pinned plans in the running system: a few requests per plan, one repeat.
+#
+#   conda run --no-capture-output -n edgeinf python scripts/run_experiment.py experiments/configs/smoke_pinned_mobilenetv2.yaml --force
+seed: 0
+model: mobilenetv2
+checkpoint: checkpoints/exits_mobilenetv2.pt
+frames: data/frames
+split: test
+devices: [device-1]
+variants:
+  - offload_jpeg
+  - {variant: pinned, k: 5, tau: 0.5}
+  - {variant: pinned, k: 20, tau: 0.9}
+jpeg_quality: 50
+rate_hz: 2
+traces: [static_1mbps, static_20mbps]
+repeats: 1
+rounds: 1
+block_requests: 20
+block_warmup: 5
+warmup_requests: 50
+rpc_timeout_s: 10.0

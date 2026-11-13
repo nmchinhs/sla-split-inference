@@ -2,9 +2,13 @@
 
     python scripts/plots.py summary results/<name> [results/<name> ...]
     python scripts/plots.py baselines results/baselines_mobilenetv2 results/baselines_resnet18
+    python scripts/plots.py predictor results/predictor_mobilenetv2 results/predictor_resnet18
 
 `summary` prints one line per model, bandwidth and variant. `baselines` also writes that table to
 experiments/baselines/summary.csv and the figure to figures/baselines_latency.png and .pdf.
+`predictor` compares every cell of a run of fixed plans with what scheduler/predictor.py says
+(see `validate`), and writes experiments/predictor/validation.csv and
+figures/predictor_validation.png and .pdf.
 
 How a cell is summarised. The median and the 95th percentile of the latency are taken per repeat
 and then averaged over the repeats; the lowest and highest repeat give the spread. A request's
@@ -35,6 +39,8 @@ import pandas as pd  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.ticker import FuncFormatter, NullLocator  # noqa: E402
 
+from edgeinf.scheduler.predictor import Link, Profiles, load_profiles, predict  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUMMARY_PATH = REPO_ROOT / "experiments" / "baselines" / "summary.csv"
 FIGURE_PATH = REPO_ROOT / "figures" / "baselines_latency"
@@ -56,6 +62,14 @@ VARIANT_COLOURS = {
     "joint": "#008300",  # green
 }
 MODEL_TITLES = {"mobilenetv2": "MobileNetV2", "resnet18": "ResNet-18"}
+# In the figure that compares models, not variants: two colours of the set checked above.
+MODEL_COLOURS = {"mobilenetv2": "#2a78d6", "resnet18": "#eb6834"}
+VALIDATION_PATH = REPO_ROOT / "experiments" / "predictor" / "validation.csv"
+VALIDATION_FIGURE = REPO_ROOT / "figures" / "predictor_validation"
+ERROR_TARGET = 0.15  # PLAN.md Phase 4: median error of the predictor under 15%
+VALIDATED = (("mean", "Mean"), ("p95", "95th percentile"))
+BAND_ALPHA = 0.5
+LATENCY_TICKS = (10, 20, 50, 100, 200, 500, 1000, 2000, 5000)  # ms, on a logarithmic axis
 STATISTICS = (("median", "Median latency (ms)"), ("p95", "95th-percentile latency (ms)"))
 
 SURFACE = "#ffffff"
@@ -88,7 +102,8 @@ def load_runs(results_dir: Path) -> pd.DataFrame:
     """All requests of the finished runs in `results_dir`, one row each.
 
     To the columns of the CSVs it adds, from each run's JSON record: model, trace, rate_mbit,
-    repeat, rate_hz (requests per second; missing for back to back) and n_blocks.
+    delay_ms, repeat, rate_hz (requests per second; missing for back to back), n_blocks,
+    jpeg_quality and rtt_est_ms (the median of the device's RTT estimates over the run).
     """
     runs = []
     for csv_path in sorted(results_dir.glob("*_r*.csv")):
@@ -100,6 +115,12 @@ def load_runs(results_dir: Path) -> pd.DataFrame:
         requests["repeat"] = record["repeat"]
         requests["rate_hz"] = record["config"]["rate_hz"]
         requests["n_blocks"] = record["blocks"][0]["n_blocks"]
+        requests["delay_ms"] = float(record["trace"]["delay_ms"])
+        requests["jpeg_quality"] = record["config"].get("jpeg_quality")
+        # The device's RTT estimate has no column in the CSV; each block's record has it.
+        estimates = [block.get("link", {}).get("rtt_ms") for block in record["blocks"]]
+        estimates = [value for value in estimates if value is not None]
+        requests["rtt_est_ms"] = pd.Series(estimates).median() if estimates else math.nan
         runs.append(requests)
     if not runs:
         raise FileNotFoundError(f"no runs in {results_dir}")
@@ -155,9 +176,100 @@ def summarise(requests: pd.DataFrame) -> pd.DataFrame:
         key=lambda row: (
             models.index(row["model"]),
             row["rate_mbit"],
-            variants.index(row["variant"]),
+            variants.index(row["variant"]) if row["variant"] in variants else len(variants),
         )
     )
+    return pd.DataFrame(rows)
+
+
+def validate(requests: pd.DataFrame, profiles: dict[str, Profiles]) -> pd.DataFrame:
+    """Measured against predicted latency: one row per model, bandwidth and plan (k, tau).
+
+    Measured is the service time, the latency without the time a request waited for the device,
+    because that is what the predictor predicts: its mean and its 95th percentile per repeat,
+    averaged over the repeats. Predicted comes twice. `predicted_*` is from the link as the
+    trace set it (rate and delay), which tests the model alone; `est_*` is from what the device
+    itself estimated (the median of its bandwidth estimates over the cell, and of its RTT
+    estimates), which is what a scheduler on the device would get. Errors are
+    (predicted - measured) / measured in percent, so a positive error is a prediction on the slow
+    side. `exit_share` is the share of requests an exit answered, `predicted_exit_share` is
+    1 - P_continue of the exit profile; accuracies in percent, measured on the split of the run
+    and predicted from the validation split.
+
+    A cell is `compared` unless it is overloaded (see the module docstring: without pauses
+    between requests the device is not in the state the profiles were taken in) or had
+    fallbacks.
+    """
+    rows = []
+    keys = ["model", "trace", "rate_mbit", "variant", "k", "tau"]
+    for (model, trace, rate_mbit, variant, k, tau), cell in requests.groupby(keys):
+        service = (cell["latency_ms"] - cell["wait_ms"]).groupby(cell["repeat"])
+        mean_ms = service.mean().mean()
+        p95_ms = service.apply(lambda times: percentile(times.tolist(), P95)).mean()
+        rate_hz = cell["rate_hz"].iloc[0]
+        utilisation = mean_ms * rate_hz / MS_PER_S if pd.notna(rate_hz) else math.nan
+        fallbacks = int(((cell["edge_up"] == 0) & (cell["k"] < cell["n_blocks"])).sum())
+        quality = cell["jpeg_quality"].iloc[0]
+        jpeg_quality = int(quality) if variant == "offload_jpeg" else None
+
+        def predicted(bw_mbps: float, rtt_ms: float, k=k, tau=tau, model=model, q=jpeg_quality):
+            if pd.isna(bw_mbps) or pd.isna(rtt_ms):
+                return None
+            return predict(profiles[model], int(k), float(tau), Link(bw_mbps, rtt_ms), q)
+
+        ideal = predicted(rate_mbit, cell["delay_ms"].iloc[0])
+        bw_est, rtt_est = cell["bw_est_mbps"].median(), cell["rtt_est_ms"].median()
+        estimated = predicted(bw_est, rtt_est)
+        rows.append(
+            {
+                "model": model,
+                "trace": trace,
+                "rate_mbit": rate_mbit,
+                "variant": variant,
+                "k": int(k),
+                "tau": float(tau),
+                "repeats": cell["repeat"].nunique(),
+                "requests": len(cell),
+                "mean_ms": mean_ms,
+                "predicted_mean_ms": ideal.mean_ms,
+                "mean_error_pct": PERCENT * (ideal.mean_ms - mean_ms) / mean_ms,
+                "p95_ms": p95_ms,
+                "predicted_p95_ms": ideal.p95_ms,
+                "p95_error_pct": PERCENT * (ideal.p95_ms - p95_ms) / p95_ms,
+                "exit_share": PERCENT * cell["exited_on_device"].mean(),
+                "predicted_exit_share": PERCENT * (1 - ideal.p_continue),
+                "accuracy": PERCENT * cell["correct"].mean(),
+                "predicted_accuracy": PERCENT * ideal.accuracy,
+                "bw_est_mbps": bw_est,
+                "rtt_est_ms": rtt_est,
+                "est_mean_ms": estimated.mean_ms if estimated else math.nan,
+                "est_p95_ms": estimated.p95_ms if estimated else math.nan,
+                "utilisation": utilisation,
+                "overloaded": bool(utilisation > 1),
+                "fallbacks": fallbacks,
+                "compared": not utilisation > 1 and fallbacks == 0,
+            }
+        )
+    models = list(MODEL_TITLES)
+    rows.sort(key=lambda row: (models.index(row["model"]), row["rate_mbit"], row["k"], row["tau"]))
+    return pd.DataFrame(rows)
+
+
+def error_summary(table: pd.DataFrame) -> pd.DataFrame:
+    """Per model, over the compared cells of `validate`: the median of the absolute error of the
+    mean and of the p95 in percent, for both kinds of prediction, and how many cells lie within
+    ERROR_TARGET."""
+    rows = []
+    for model, cells in table[table["compared"]].groupby("model", sort=False):
+        of_model = int((table["model"] == model).sum())
+        row = {"model": model, "cells": len(cells), "left_out": of_model - len(cells)}
+        for statistic, _ in VALIDATED:
+            measured = cells[f"{statistic}_ms"]
+            for source, column in (("predicted", "predicted"), ("est", "from_estimates")):
+                error = (cells[f"{source}_{statistic}_ms"] - measured).abs() / measured
+                row[f"{statistic}_{column}_median_error_pct"] = PERCENT * error.median()
+                row[f"{statistic}_{column}_within_target"] = int((error <= ERROR_TARGET).sum())
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -338,13 +450,121 @@ def plot_baselines(summary: pd.DataFrame, path: Path) -> None:
     plt.close(figure)
 
 
+def plot_validation(table: pd.DataFrame, path: Path) -> None:
+    """Draw predicted against measured latency, one point per cell, and save the figure.
+
+    Left the mean, right the 95th percentile, both axes logarithmic. Points on the diagonal are
+    predicted exactly; the band around it is ERROR_TARGET on either side. Hollow points are the
+    cells left out of the error (overloaded, or with fallbacks).
+    """
+    models = [model for model in MODEL_TITLES if model in set(table["model"])]
+    width, height = PANEL_SIZE
+    figure, panels = plt.subplots(
+        1, len(VALIDATED), figsize=(width * len(VALIDATED), height * 1.25), facecolor=SURFACE
+    )
+    for axes, (statistic, title) in zip(panels, VALIDATED, strict=True):
+        measured, predicted = table[f"{statistic}_ms"], table[f"predicted_{statistic}_ms"]
+        low = min(measured.min(), predicted.min()) / 1.3
+        high = max(measured.max(), predicted.max()) * 1.3
+        axes.set_facecolor(SURFACE)
+        axes.fill_between(
+            [low, high],
+            [low * (1 - ERROR_TARGET), high * (1 - ERROR_TARGET)],
+            [low * (1 + ERROR_TARGET), high * (1 + ERROR_TARGET)],
+            color=GRID,
+            alpha=BAND_ALPHA,
+            linewidth=0,
+            zorder=1,
+        )
+        axes.plot([low, high], [low, high], color=AXIS, linewidth=WHISKER_WIDTH, zorder=2)
+        for model in models:
+            cells = table[table["model"] == model]
+            for compared, face in ((True, MODEL_COLOURS[model]), (False, SURFACE)):
+                shown = cells[cells["compared"] == compared]
+                axes.scatter(
+                    shown[f"{statistic}_ms"],
+                    shown[f"predicted_{statistic}_ms"],
+                    s=MARKER_SIZE**2 * 0.6,
+                    facecolor=face,
+                    edgecolor=SURFACE if compared else MODEL_COLOURS[model],
+                    linewidth=RING_WIDTH if compared else LINE_WIDTH * 0.6,
+                    zorder=3,
+                )
+        axes.set_xscale("log")
+        axes.set_yscale("log")
+        axes.set_xlim(low, high)
+        axes.set_ylim(low, high)
+        ticks = [tick for tick in LATENCY_TICKS if low <= tick <= high]
+        for axis in (axes.xaxis, axes.yaxis):
+            axis.set_ticks(ticks)
+            axis.set_major_formatter(FuncFormatter(_plain))
+            axis.set_minor_locator(NullLocator())
+        axes.grid(True, color=GRID, linewidth=0.6, zorder=0)
+        axes.set_axisbelow(True)
+        for side in ("top", "right"):
+            axes.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            axes.spines[side].set_color(AXIS)
+        axes.tick_params(colors=INK_MUTED, labelsize=LABEL_SIZE, length=3)
+        axes.set_title(f"{title} latency", fontsize=10, color=INK, loc="left")
+        axes.set_xlabel("Measured (ms)", fontsize=9, color=INK_SECONDARY)
+        axes.set_ylabel("Predicted (ms)", fontsize=9, color=INK_SECONDARY)
+
+    def marker(colour: str, filled: bool, label: str) -> Line2D:
+        return Line2D(
+            [],
+            [],
+            linestyle="",
+            marker="o",
+            markersize=MARKER_SIZE * 0.8,
+            markerfacecolor=colour if filled else SURFACE,
+            markeredgecolor=colour,
+            label=label,
+        )
+
+    handles = [marker(MODEL_COLOURS[model], True, MODEL_TITLES[model]) for model in models]
+    if not table["compared"].all():
+        handles.append(marker(INK_MUTED, False, "left out: overloaded or fallback"))
+    handles.append(
+        Line2D([], [], color=GRID, linewidth=6, label=f"within {ERROR_TARGET:.0%} of measured")
+    )
+    figure.legend(
+        handles=handles,
+        loc="upper center",
+        ncols=len(handles),
+        frameon=False,
+        fontsize=LABEL_SIZE,
+        labelcolor=INK_SECONDARY,
+        columnspacing=1.4,
+        handletextpad=0.5,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.93))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=FIGURE_DPI, facecolor=SURFACE)
+    plt.close(figure)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("what", choices=("summary", "baselines"))
+    parser.add_argument("what", choices=("summary", "baselines", "predictor"))
     parser.add_argument("results", type=Path, nargs="+", help="folders under results/")
     args = parser.parse_args()
 
     requests = pd.concat([load_runs(folder) for folder in args.results], ignore_index=True)
+    if args.what == "predictor":
+        profiles = {model: load_profiles(model) for model in requests["model"].unique()}
+        table = validate(requests, profiles)
+        shown = ["model", "rate_mbit", "variant", "k", "tau", "mean_ms", "predicted_mean_ms"]
+        shown += ["mean_error_pct", "p95_ms", "predicted_p95_ms", "p95_error_pct", "exit_share"]
+        shown += ["predicted_exit_share", "bw_est_mbps", "compared"]
+        print(table[shown].round(1).to_string(index=False))
+        print(error_summary(table).round(1).T.to_string(header=False))
+        VALIDATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+        table.round(SUMMARY_DECIMALS).to_csv(VALIDATION_PATH, index=False)
+        for suffix in (".png", ".pdf"):
+            plot_validation(table, VALIDATION_FIGURE.with_suffix(suffix))
+        print(f"wrote {VALIDATION_PATH} and {VALIDATION_FIGURE}.png, .pdf")
+        return
     summary = summarise(requests)
     table = summary.round(SUMMARY_DECIMALS)
     print(table.to_string(index=False))

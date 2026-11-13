@@ -82,6 +82,15 @@ def test_edge_profile_has_a_time_for_every_split_point_it_can_receive(model):
     assert all(ms > 0 for ms in profile["edge_ms"])
 
 
+def test_the_edge_can_be_profiled_with_idle_time_before_every_run(model, monkeypatch):
+    pauses: list[float] = []
+    monkeypatch.setattr("edgeinf.profiler.layer_profile.time.sleep", pauses.append)
+    profile_edge(model, REQUESTS, WARMUP, "cpu", SEED)
+    assert pauses == []  # back to back unless asked
+    profile_edge(model, REQUESTS, WARMUP, "cpu", SEED, gap_ms=200.0)
+    assert pauses == [0.2] * (model.num_blocks * (REQUESTS + WARMUP))
+
+
 def test_running_the_whole_model_costs_more_than_its_first_block(model):
     profile = profile_device(model, REQUESTS, WARMUP, GAP_MS, SEED)
     assert profile["device_ms"][model.num_blocks] > profile["device_ms"][1]

@@ -2,7 +2,8 @@
 
     EdgeClient   the two RPCs to the edge, each with a timeout
     Plan         how one request is served: variant, split point k, threshold tau
-    Device       serves one request: blocks [0, k), send, wait for the answer, or finish alone
+    Device       serves one request: blocks [0, k) and the exits in them, send, wait for the
+                 answer, or finish alone; probes the link when its estimate is old
     serve        the arrival loop: requests at a fixed rate, one row per request
     Agent, main  the process that runs in a device container and takes jobs from the host
 
@@ -13,7 +14,13 @@ Fallback: if the edge does not answer an Infer in time, answers with an error, o
 be down and a Health probe does not say otherwise, the device runs the remaining blocks itself.
 Every fallback is logged.
 
-Must stay free of CUDA calls: it runs in the CPU-only image. Exit checks come with Phase 3.
+Exits: with tau < 1 the exit heads before k are checked in order, and the first that is sure
+enough answers; nothing is sent then (models/split.py, `run_head_exits`).
+
+The link: every answered Infer and, in the pauses between requests, a Health probe now and then
+feed the device's estimate of bandwidth and round-trip time (device/bandwidth.py).
+
+Must stay free of CUDA calls: it runs in the CPU-only image.
 """
 
 from __future__ import annotations
@@ -33,8 +40,9 @@ import torch
 
 from edgeinf.common.grpc_options import GRPC_OPTIONS
 from edgeinf.data.imagenette import load_frames
+from edgeinf.device.bandwidth import LinkEstimator
 from edgeinf.models.multi_exit import MultiExitModel, load_checkpoint
-from edgeinf.models.split import pack, run_head, run_tail
+from edgeinf.models.split import TAU_NEVER, pack, run_head_exits, run_tail
 from edgeinf.rpc import inference_pb2 as pb
 from edgeinf.rpc import inference_pb2_grpc as pb_grpc
 
@@ -44,10 +52,14 @@ EDGE_WAIT_S = 60.0  # how long the agent waits for the edge before its first job
 EDGE_POLL_S = 0.5
 DEVICE_THREADS = 1  # a device has one core
 MS_PER_S = 1e3
+# A probe is made only if this multiple of its expected time fits before the next arrival.
+PROBE_SLACK = 1.5
 
 # The variants whose plan is fixed. The others (split_only, exit_only, joint) need the scheduler.
 VARIANTS = ("local", "offload", "offload_jpeg")
-NO_EXITS = 1.0  # tau at which no exit is ever taken
+# Not a variant of the comparison: a plan (k, tau) written in the job, to validate the predictor.
+PINNED = "pinned"
+NO_EXITS = TAU_NEVER  # tau at which no exit is ever taken
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +138,15 @@ def fixed_plan(variant: str, n_blocks: int, jpeg_quality: int | None = None) -> 
     raise ValueError(f"variant {variant!r} has no fixed plan; expected one of {VARIANTS}")
 
 
+def pinned_plan(k: object, tau: object, n_blocks: int) -> Plan:
+    """The plan of a `pinned` job: split point `k` in [0, n] and threshold `tau` in (0, 1]."""
+    if not isinstance(k, int) or not 0 <= k <= n_blocks:
+        raise ValueError(f"a pinned plan needs a split point k in [0, {n_blocks}], got {k!r}")
+    if not isinstance(tau, int | float) or not 0 < tau <= NO_EXITS:
+        raise ValueError(f"a pinned plan needs a threshold tau in (0, 1], got {tau!r}")
+    return Plan(PINNED, k, float(tau))
+
+
 @dataclass
 class Answer:
     """The outcome of one request, as the device saw it. Times in ms."""
@@ -144,12 +165,16 @@ class Device:
     """Serves requests with `model`, offloading through `client` (None: there is no edge).
 
     `edge_up` is what the device believes about the edge. It starts as true, turns false when an
-    Infer fails, and true again when a Health probe is answered with ok.
+    Infer fails, and true again when a Health probe is answered with ok. `link` is its estimate
+    of the link, which several devices of one process may share.
     """
 
-    def __init__(self, model: MultiExitModel, client: EdgeClient | None) -> None:
+    def __init__(
+        self, model: MultiExitModel, client: EdgeClient | None, link: LinkEstimator | None = None
+    ) -> None:
         self.model = model
         self.client = client
+        self.link = link or LinkEstimator()
         self.edge_up = client is not None
         self._requests = 0
 
@@ -160,7 +185,9 @@ class Device:
         """
         request_id, self._requests = self._requests, self._requests + 1
         model = self.model
-        x = run_head(model, frame, plan.k)
+        x, taken = run_head_exits(model, frame, plan.k, plan.tau)
+        if taken is not None:
+            return Answer(taken.label, True, bytes_sent=0, edge_up=self.edge_up, rpc_ms=0.0)
         if plan.k == model.num_blocks:
             return Answer(int(x.argmax(1)), False, bytes_sent=0, edge_up=self.edge_up, rpc_ms=0.0)
 
@@ -182,7 +209,10 @@ class Device:
                 self.edge_up = False
                 reason = f"Infer failed with {error.code().name} ({error.details()})"
             else:
-                waited_s += time.perf_counter() - start
+                infer_ms = (time.perf_counter() - start) * MS_PER_S
+                waited_s += infer_ms / MS_PER_S
+                self.link.queue_len = reply.queue_len
+                self.link.add_transfer(bytes_sent, infer_ms - reply.queue_ms - reply.compute_ms)
                 return Answer(
                     reply.label,
                     False,
@@ -203,6 +233,42 @@ class Device:
         )
         label = int(run_tail(model, x, plan.k).argmax(1))
         return Answer(label, False, bytes_sent, edge_up=False, rpc_ms=waited_s * MS_PER_S)
+
+    def _timed_health(self, padding: bytes = b"") -> tuple[pb.HealthReply | None, float]:
+        """A Health call and its round trip in ms; the reply is None unless the edge said ok."""
+        start = time.perf_counter()
+        reply = self.client.health(padding, timeout_s=HEALTH_TIMEOUT_S)
+        took_ms = (time.perf_counter() - start) * MS_PER_S
+        return (reply if reply is not None and reply.ok else None), took_ms
+
+    def probe(self, budget_s: float) -> None:
+        """Refresh the link estimates that are due, if that fits into `budget_s` seconds.
+
+        Called in the pause before the next request. An empty Health call gives the RTT; one
+        with padding gives the bandwidth. A probe is skipped if PROBE_SLACK times its expected
+        time does not fit, and no probe is made while the edge is believed to be down. A probe
+        that gets no answer changes nothing.
+        """
+        if self.client is None or not self.edge_up:
+            return
+        link, budget_ms = self.link, budget_s * MS_PER_S
+        if link.rtt_due():
+            if link.rtt_probe_ms() * PROBE_SLACK > budget_ms:
+                return
+            reply, took_ms = self._timed_health()
+            budget_ms -= took_ms
+            if reply is None:
+                return
+            link.add_rtt(took_ms)
+            link.queue_len = reply.queue_len
+        if link.bw_due() and link.rtt_ms is not None:
+            if link.bw_probe_ms() * PROBE_SLACK > budget_ms:
+                return
+            padding = bytes(link.probe_bytes())
+            reply, took_ms = self._timed_health(padding)
+            if reply is not None:
+                link.add_transfer(len(padding), took_ms)
+                link.queue_len = reply.queue_len
 
 
 def serve(
@@ -226,8 +292,10 @@ def serve(
     back to back: each is due when the previous one finishes.
 
     `frames` is uint8, shape (N, 3, H, W), with one true label each. The first `warmup` requests
-    are served but get no row. A row has the columns of common/logging.py. `clock` and `sleep`
-    count seconds, `wall` is Unix time.
+    are served but get no row. A row has the columns of common/logging.py; its bandwidth
+    estimate is the one the request started with. After a request the device may probe the link
+    in the pause that is left before the next arrival. `clock` and `sleep` count seconds, `wall`
+    is Unix time.
     """
     if rate_hz is not None and rate_hz <= 0:
         raise ValueError(f"rate_hz must be positive, or None for back to back; got {rate_hz}")
@@ -238,8 +306,12 @@ def serve(
         if (idle_s := due - clock()) > 0:
             sleep(idle_s)
         started = clock()
+        bw_est_mbps = device.link.bw_mbps
         answer = device.infer(frames[i : i + 1], plan)
         finished = clock()
+        if rate_hz is not None and i + 1 < len(labels):
+            if (pause_s := start + (i + 1) / rate_hz - finished) > 0:
+                device.probe(pause_s)
         if i < warmup:
             continue
         row = {
@@ -252,7 +324,7 @@ def serve(
             "latency_ms": (finished - due) * MS_PER_S,
             "bytes_sent": answer.bytes_sent,
             "correct": answer.label == int(label),
-            "bw_est_mbps": None,  # the estimator comes with the scheduler
+            "bw_est_mbps": bw_est_mbps,
             "edge_queue_len": answer.edge_queue_len,
             "edge_up": answer.edge_up,
             "wait_ms": (started - due) * MS_PER_S,
@@ -269,22 +341,25 @@ class Agent:
     """The process in a device container: keeps models and frames loaded and runs jobs.
 
     A job is a dict:
-        checkpoint    file written by scripts/train_backbone.py
+        checkpoint    file written by scripts/train_backbone.py or scripts/train_exits.py
         frames_dir    folder with the exported frames (scripts/export_frames.py)
         split         "val" or "test"
         indices       which frames to serve, in this order
-        variant       local, offload or offload_jpeg
+        variant       local, offload, offload_jpeg, or pinned
         jpeg_quality  for offload_jpeg
+        k, tau        for pinned: the plan to serve
         rate_hz       requests per second, or null for back to back
         warmup        how many of the first requests get no row
         timeout_s     timeout of an Infer call
     The reply is {"rows": one dict per logged request, "minor_faults": page faults while
-    serving, "n_blocks": n of the model, the k that means all local}.
+    serving, "n_blocks": n of the model, the k that means all local, "link": the device's
+    estimate of the link when the job ended (bw_mbps, rtt_ms, queue_len)}.
     """
 
     def __init__(self, device_id: str, edge_addr: str | None) -> None:
         self.device_id = device_id
         self.client = EdgeClient(edge_addr, device_id) if edge_addr else None
+        self.link = LinkEstimator()  # one link, whichever model is served
         self.devices: dict[str, Device] = {}  # by checkpoint
         self._frames: dict[tuple[str, str], tuple[np.ndarray, np.ndarray]] = {}
         self._edge_seen = False
@@ -309,7 +384,7 @@ class Agent:
         """Serve the requests of one job and return its rows."""
         checkpoint = job["checkpoint"]
         if checkpoint not in self.devices:
-            self.devices[checkpoint] = Device(load_checkpoint(checkpoint), self.client)
+            self.devices[checkpoint] = Device(load_checkpoint(checkpoint), self.client, self.link)
         device = self.devices[checkpoint]
         source = (job["frames_dir"], job["split"])
         if source not in self._frames:
@@ -320,8 +395,12 @@ class Agent:
         frames = torch.from_numpy(np.ascontiguousarray(all_frames[indices]))
         labels = [int(all_labels[index]) for index in indices]
 
-        plan = fixed_plan(job["variant"], device.model.num_blocks, job.get("jpeg_quality"))
-        if plan.k < device.model.num_blocks:
+        n_blocks = device.model.num_blocks
+        if job["variant"] == PINNED:
+            plan = pinned_plan(job.get("k"), job.get("tau"), n_blocks)
+        else:
+            plan = fixed_plan(job["variant"], n_blocks, job.get("jpeg_quality"))
+        if plan.k < n_blocks:
             self._await_edge()
         if self.client is not None:
             self.client.timeout_s = job["timeout_s"]
@@ -337,7 +416,12 @@ class Agent:
                 device_id=self.device_id,
             )
         faults = resource.getrusage(resource.RUSAGE_SELF).ru_minflt - faults
-        return {"rows": rows, "minor_faults": faults, "n_blocks": device.model.num_blocks}
+        return {
+            "rows": rows,
+            "minor_faults": faults,
+            "n_blocks": n_blocks,
+            "link": self.link.as_dict(),
+        }
 
 
 def main() -> None:

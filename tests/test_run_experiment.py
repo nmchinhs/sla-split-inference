@@ -18,7 +18,7 @@ N_FRAMES = 3925  # the test split
 CONFIG = {
     "seed": 0,
     "model": "mobilenetv2",
-    "checkpoint": "checkpoints/train_mobilenetv2.pt",
+    "checkpoint": "checkpoints/exits_mobilenetv2.pt",
     "frames": "data/frames",
     "split": "test",
     "devices": ["device-1"],
@@ -35,7 +35,7 @@ CONFIG = {
 }
 SHIPPED_CONFIGS = sorted(
     path
-    for prefix in ("baselines", "smoke", "calibration_runtime")
+    for prefix in ("baselines", "smoke", "calibration_runtime", "predictor")
     for path in (REPO_ROOT / "experiments" / "configs").glob(f"{prefix}_*.yaml")
 )
 
@@ -79,6 +79,56 @@ def test_values_that_cannot_be_run_are_refused(change, message):
         run_experiment.check_config({**CONFIG, **change})
 
 
+PINNED = {"variant": "pinned", "k": 5, "tau": 0.9}
+
+
+def test_a_plan_can_be_written_out_instead_of_a_variant_name():
+    config = {**CONFIG, "variants": ["local", PINNED, {**PINNED, "tau": 1.0}]}
+    run_experiment.check_config(config)
+    assert run_experiment.plans(config) == [
+        {"label": "local", "variant": "local"},
+        {"label": "pinned k=5 tau=0.9", "variant": "pinned", "k": 5, "tau": 0.9},
+        {"label": "pinned k=5 tau=1.0", "variant": "pinned", "k": 5, "tau": 1.0},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ({**PINNED, "variant": "joint"}, "pinned"),  # only a pinned plan is written out
+        ({"variant": "pinned", "k": 5}, "tau"),
+        ({**PINNED, "k": -1}, "k"),
+        ({**PINNED, "k": 2.5}, "k"),
+        ({**PINNED, "tau": 0}, "tau"),
+        ({**PINNED, "tau": 1.2}, "tau"),
+        ({**PINNED, "jpeg_quality": 50}, "keys"),
+    ],
+)
+def test_a_plan_that_cannot_be_served_is_refused(entry, message):
+    with pytest.raises(ValueError, match=message):
+        run_experiment.check_config({**CONFIG, "variants": [entry]})
+
+
+def test_the_same_plan_twice_is_refused():
+    with pytest.raises(ValueError, match="different"):
+        run_experiment.check_config({**CONFIG, "variants": [PINNED, dict(PINNED)]})
+
+
+def test_pinned_plans_take_turns_like_variants_and_their_jobs_carry_the_plan():
+    config = {**CONFIG, "variants": ["offload_jpeg", PINNED, {**PINNED, "k": 20}]}
+    blocks = run_experiment.plan_run(config, repeat=0, trace="static_1mbps", n_frames=N_FRAMES)
+    first_round = [block for block in blocks if block["round"] == 0]
+    assert [block["variant"] for block in first_round] == [
+        "offload_jpeg",
+        "pinned k=5 tau=0.9",
+        "pinned k=20 tau=0.9",
+    ]
+    job = run_experiment.job(config, first_round[2])
+    assert (job["variant"], job["k"], job["tau"]) == ("pinned", 20, 0.9)
+    assert "label" not in job
+    assert "k" not in run_experiment.job(config, first_round[0])
+
+
 def test_jpeg_quality_may_be_left_out_when_no_variant_uses_it():
     run_experiment.check_config({**CONFIG, "variants": ["local", "offload"], "jpeg_quality": None})
 
@@ -91,7 +141,8 @@ def test_the_configs_in_the_repository_are_valid_and_their_traces_exist(path):
             run_experiment.read_trace(run_experiment.TRACE_DIR / f"{trace}.csv")
         )
         assert rate_mbit > 0 and delay_ms >= 0 and loss_pct >= 0
-    assert (REPO_ROOT / config["checkpoint"]).name == f"train_{config['model']}.pt"
+    # The checkpoint with exit heads, which is the one the edge serves (scripts/gen_compose.py).
+    assert (REPO_ROOT / config["checkpoint"]).name == f"exits_{config['model']}.pt"
 
 
 def test_both_models_have_a_baseline_config_at_the_agreed_rates_and_bandwidths():
@@ -232,7 +283,7 @@ def test_the_order_and_the_frames_depend_on_the_repeat_and_the_trace():
 def test_a_job_tells_the_agent_everything_it_needs():
     block = {"round": 2, "variant": "offload_jpeg", "indices": [7, 3, 9], "warmup": 1}
     assert run_experiment.job(CONFIG, block) == {
-        "checkpoint": "checkpoints/train_mobilenetv2.pt",
+        "checkpoint": "checkpoints/exits_mobilenetv2.pt",
         "frames_dir": "data/frames",
         "split": "test",
         "indices": [7, 3, 9],

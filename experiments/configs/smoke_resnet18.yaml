@@ -6,7 +6,7 @@
 # Writes results/smoke_resnet18/. About two minutes.
 seed: 0
 model: resnet18
-checkpoint: checkpoints/train_resnet18.pt
+checkpoint: checkpoints/exits_resnet18.pt
 frames: data/frames
 split: test
 devices: [device-1]
